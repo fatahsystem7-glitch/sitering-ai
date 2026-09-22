@@ -1,0 +1,65 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* Dark-first SaaS theme: deep zinc backdrops + emerald accents */
+  :root,
+  .dark {
+    --background: 240 10% 3.9%;
+    --foreground: 0 0% 98%;
+    --card: 240 10% 6%;
+    --card-foreground: 0 0% 98%;
+    --popover: 240 10% 6%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 160 84% 39%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 240 4% 16%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 240 4% 14%;
+    --muted-foreground: 240 5% 64.9%;
+    --accent: 160 84% 39%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 4% 16%;
+    --input: 240 4% 16%;
+    --ring: 160 84% 39%;
+    --radius: 0.75rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings:
+      "rlig" 1,
+      "calt" 1;
+  }
+  ::selection {
+    @apply bg-emerald-500/30 text-emerald-50;
+  }
+}
+
+@layer utilities {
+  .text-gradient {
+    @apply bg-gradient-to-r from-emerald-300 via-emerald-400 to-teal-300 bg-clip-text text-transparent;
+  }
+  .card-glow {
+    box-shadow:
+      0 0 0 1px hsl(160 84% 39% / 0.12),
+      0 8px 40px -12px hsl(160 84% 39% / 0.25);
+  }
+  .bg-grid {
+    background-image:
+      linear-gradient(to right, hsl(240 4% 16% / 0.6) 1px, transparent 1px),
+      linear-gradient(to bottom, hsl(240 4% 16% / 0.6) 1px, transparent 1px);
+    background-size: 56px 56px;
+  }
+}
