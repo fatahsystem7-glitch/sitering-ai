@@ -88,6 +88,62 @@ export default async function SettingsPage() {
 
       <Card className="bg-card/70">
         <CardHeader>
+          <CardTitle className="text-base">
+            Missed-Call Forwarding Setup
+          </CardTitle>
+          <CardDescription>
+            Standard GSM codes — work on EE, O2, Vodafone, Three and most UK
+            networks. Takes 30 seconds.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <ol className="space-y-3 text-sm text-muted-foreground">
+            <li className="flex items-start gap-3">
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-xs font-bold text-emerald-300">
+                1
+              </span>
+              <span className="pt-0.5">
+                Open your phone&apos;s dialler and type{" "}
+                <code className="rounded bg-zinc-900 px-1.5 py-0.5 font-mono text-xs text-emerald-300">
+                  **61*
+                  {telephony?.assigned_phone_number?.replace(/\s/g, "") ??
+                    "YOUR_SITERING_NUMBER"}
+                  #
+                </code>
+              </span>
+            </li>
+            <li className="flex items-start gap-3">
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-xs font-bold text-emerald-300">
+                2
+              </span>
+              <span className="pt-0.5">
+                Press call — your network confirms forwarding is active. Missed
+                calls now reach your AI receptionist instead of voicemail.
+              </span>
+            </li>
+            <li className="flex items-start gap-3">
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-xs font-bold text-emerald-300">
+                3
+              </span>
+              <span className="pt-0.5">
+                To switch forwarding off at any time, dial{" "}
+                <code className="rounded bg-zinc-900 px-1.5 py-0.5 font-mono text-xs text-emerald-300">
+                  ##61#
+                </code>{" "}
+                and press call.
+              </span>
+            </li>
+          </ol>
+          <p className="rounded-xl border border-border/60 bg-muted/40 px-3.5 py-2.5 text-xs leading-relaxed text-muted-foreground">
+            iPhone alternative: Settings → Phone → Call Forwarding. Forwarding
+            only triggers on calls you don&apos;t answer — answered calls are
+            never affected.
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card className="bg-card/70">
+        <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <CreditCard size={18} className="text-emerald-400" />
             Subscription & Billing

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Check } from "lucide-react";
+import { Check, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -12,14 +12,14 @@ import {
 import { Badge } from "@/components/ui/badge";
 
 const FEATURES = [
-  "24/7 AI call answering",
-  "Dedicated UK (+44) number",
-  "500 call minutes included (~150 calls)",
-  "Instant SMS + email lead alerts",
-  "Emergency call forwarding to your mobile",
-  "Full transcripts & searchable call log",
+  "24/7 AI call answering — nights & weekends included",
+  "Your own dedicated UK (+44) number",
+  "500 call minutes included every month (~150 calls)",
+  "Job details sent to your phone in seconds",
+  "Emergency calls forwarded to your mobile live",
+  "Every call transcribed, logged & searchable",
   "Works with EE, O2, Vodafone, Three",
-  "£0.10/min after 500 minutes — capped fairly",
+  "£0.10/min after 500 minutes — no cut-offs, ever",
 ];
 
 export function Pricing() {
@@ -30,25 +30,27 @@ export function Pricing() {
           Simple pricing
         </p>
         <h2 className="text-3xl font-bold tracking-tight md:text-4xl">
-          One plan. Every call answered.
+          One plan. Every call answered. Active today.
         </h2>
         <p className="mt-4 text-muted-foreground">
-          One emergency call-out pays for months of SiteRing. Start free for 7
-          days — no card required to look around.
+          One emergency call-out pays for months of SiteRing. Sign up, forward
+          your missed calls, and your AI receptionist starts answering today.
         </p>
       </div>
 
       <Card className="card-glow mx-auto max-w-md bg-card">
         <CardHeader className="text-center">
-          <Badge className="mx-auto mb-2 w-fit">Most popular</Badge>
+          <Badge className="mx-auto mb-2 w-fit">For UK trade contractors</Badge>
           <CardTitle className="text-xl">SiteRing Receptionist</CardTitle>
-          <CardDescription>For UK trade contractors</CardDescription>
+          <CardDescription>
+            Plumbers · Electricians · Builders · Locksmiths
+          </CardDescription>
           <div className="pt-4">
             <span className="text-5xl font-extrabold tracking-tight">£150</span>
             <span className="text-muted-foreground">/month</span>
           </div>
           <p className="pt-1 text-sm text-emerald-300">
-            7-day free trial · then £150/mo
+            No setup fees · Cancel anytime
           </p>
         </CardHeader>
         <CardContent>
@@ -65,10 +67,11 @@ export function Pricing() {
         </CardContent>
         <CardFooter className="flex-col gap-3">
           <Button size="lg" className="w-full" asChild>
-            <Link href="/signup">Start 7-Day Trial</Link>
+            <Link href="/signup">Get SiteRing AI Now</Link>
           </Button>
-          <p className="text-xs text-muted-foreground">
-            Cancel anytime · Keep your number during trial
+          <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <ShieldCheck size={14} className="text-emerald-400" />
+            Backed by our 30-day money-back guarantee
           </p>
         </CardFooter>
       </Card>

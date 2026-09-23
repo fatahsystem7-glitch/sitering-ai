@@ -109,7 +109,7 @@ function LoginForm() {
               href="/signup"
               className="font-semibold text-emerald-400 hover:underline"
             >
-              Start your 7-day trial
+              Create your account
             </Link>
           </p>
         </CardFooter>

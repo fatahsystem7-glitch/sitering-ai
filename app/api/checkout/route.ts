@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { getStripe, PRICING } from "@/lib/stripe";
+import { getStripe } from "@/lib/stripe";
 
 /**
  * POST /api/checkout
- * Creates a Stripe Checkout Session for the £150/mo plan (with trial)
+ * Creates a Stripe Checkout Session for the £150/mo plan (no trial —
+ * billing starts immediately)
  * plus a metered overage price for minutes beyond 500.
  * Requires an authenticated user.
  */
@@ -66,7 +67,6 @@ export async function POST() {
         ...(overagePrice ? [{ price: overagePrice }] : []),
       ],
       subscription_data: {
-        trial_period_days: PRICING.trialDays,
         metadata: { supabase_user_id: user.id },
       },
       metadata: { supabase_user_id: user.id },

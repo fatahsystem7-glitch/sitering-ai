@@ -2,6 +2,7 @@ import Link from "next/link";
 import { ArrowRight, BadgeCheck, PhoneCall, Star } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { DEMO_CALL_NUMBER, DEMO_CALL_TEL_LINK } from "@/lib/site";
 
 export function Hero() {
   return (
@@ -16,30 +17,30 @@ export function Hero() {
             <span className="absolute inline-flex h-full w-full animate-pulse-ring rounded-full bg-emerald-400" />
             <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
           </span>
-          Live now — answering calls for UK trades 24/7
+          24/7 AI Receptionist — built for UK trades
         </Badge>
 
         <h1 className="max-w-4xl animate-fade-up text-4xl font-extrabold leading-[1.08] tracking-tight sm:text-5xl md:text-6xl">
-          Never Miss a <span className="text-gradient">£500 Job</span> While on
-          the Tools
+          Stop Losing <span className="text-gradient">£500+ Jobs</span> to
+          Voicemail While You&apos;re on the Tools — or Up a Ladder
         </h1>
 
         <p className="mt-6 max-w-2xl animate-fade-up text-lg text-muted-foreground md:text-xl">
-          <span className="font-semibold text-foreground">SiteRing AI</span>:
-          Your 24/7 AI Receptionist built for UK Trades. Every call answered in
-          seconds — job details captured, emergencies flagged, and leads sent
-          straight to your phone.
+          <span className="font-semibold text-foreground">SiteRing AI</span>{" "}
+          answers every call in seconds — day, night and weekends. It qualifies
+          the job, takes the details and books the appointment, so you never
+          lose another job to a missed call again.
         </p>
 
         <div className="mt-8 flex animate-fade-up flex-col items-center gap-3 sm:flex-row">
           <Button size="lg" asChild>
-            <Link href="/signup">
-              Start 7-Day Trial <ArrowRight size={18} />
-            </Link>
+            <a href={DEMO_CALL_TEL_LINK}>
+              <PhoneCall size={18} /> Call the live demo: {DEMO_CALL_NUMBER}
+            </a>
           </Button>
           <Button size="lg" variant="outline" asChild>
-            <Link href="#how-it-works">
-              <PhoneCall size={18} /> See how it works
+            <Link href="#pricing">
+              Get SiteRing AI — £150/mo <ArrowRight size={18} />
             </Link>
           </Button>
         </div>
@@ -51,11 +52,11 @@ export function Hero() {
           </span>
           <span className="flex items-center gap-1.5">
             <BadgeCheck size={16} className="text-emerald-400" />
-            Zero setup fees
+            Real UK (+44) number
           </span>
           <span className="flex items-center gap-1.5">
             <BadgeCheck size={16} className="text-emerald-400" />
-            Cancel anytime
+            30-day money-back guarantee
           </span>
         </div>
 
@@ -87,7 +88,7 @@ export function Hero() {
             </p>
             <p className="flex items-center gap-1.5 pt-1 text-xs text-muted-foreground">
               <Star size={12} className="fill-amber-400 text-amber-400" />
-              Lead alert sent to contractor via SMS + email in 8 seconds
+              Job details sent to the contractor in 8 seconds
             </p>
           </div>
         </div>

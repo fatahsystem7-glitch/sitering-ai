@@ -17,18 +17,24 @@ export function Navbar() {
           </span>
         </Link>
 
-        <nav className="hidden items-center gap-8 text-sm font-medium text-muted-foreground md:flex">
+        <nav className="hidden items-center gap-7 text-sm font-medium text-muted-foreground lg:flex">
           <Link
-            href="#benefits"
+            href="#problem"
             className="transition-colors hover:text-foreground"
           >
-            Benefits
+            The Problem
           </Link>
           <Link
-            href="#how-it-works"
+            href="#solution"
             className="transition-colors hover:text-foreground"
           >
-            How it works
+            The Solution
+          </Link>
+          <Link
+            href="#live-demo"
+            className="font-semibold text-emerald-400 transition-colors hover:text-emerald-300"
+          >
+            Live Demo Call
           </Link>
           <Link
             href="#pricing"
@@ -51,7 +57,7 @@ export function Navbar() {
             <Link href="/login">Log in</Link>
           </Button>
           <Button size="sm" asChild>
-            <Link href="/signup">Start 7-Day Trial</Link>
+            <Link href="/signup">Get SiteRing AI</Link>
           </Button>
         </div>
       </div>

@@ -24,6 +24,8 @@ const callEndSchema = z.object({
     .enum(["Emergency", "Standard Quote", "General Enquiry"])
     .default("General Enquiry"),
   full_transcript: z.string().max(100_000).nullish(),
+  ai_summary: z.string().max(2000).nullish(),
+  recording_url: z.string().url().max(2000).nullish(),
   duration_seconds: z.number().int().min(0).max(86_400).default(0),
   idempotency_key: z.string().max(120).optional(),
 });

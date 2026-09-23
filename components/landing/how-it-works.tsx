@@ -4,8 +4,8 @@ const STEPS = [
   {
     icon: Rocket,
     step: "Step 1",
-    title: "Start your trial",
-    body: "Sign up in 2 minutes. You instantly get your own dedicated UK (+44) SiteRing number in your dashboard.",
+    title: "Get your number",
+    body: "Sign up in 2 minutes and activate your subscription. You instantly get your own dedicated UK (+44) SiteRing number in your dashboard.",
   },
   {
     icon: PhoneForwarded,

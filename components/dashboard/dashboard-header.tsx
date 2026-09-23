@@ -48,7 +48,7 @@ export function DashboardHeader({ profile, telephony }: Props) {
               AI Active
             </Badge>
           ) : (
-            <Badge variant="warning">Trial / Inactive</Badge>
+            <Badge variant="warning">Inactive</Badge>
           )}
 
           <Button variant="ghost" size="sm" asChild>

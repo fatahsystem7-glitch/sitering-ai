@@ -111,9 +111,9 @@ export default function SignupPage() {
           >
             <PhoneCall size={20} />
           </Link>
-          <CardTitle className="text-2xl">Start your 7-day trial</CardTitle>
+          <CardTitle className="text-2xl">Get SiteRing AI</CardTitle>
           <CardDescription>
-            £150/mo after trial · 500 minutes included · cancel anytime
+            £150/mo · 500 minutes included · 30-day money-back guarantee
           </CardDescription>
         </CardHeader>
         <form onSubmit={handleSubmit}>
@@ -226,7 +226,7 @@ export default function SignupPage() {
               disabled={loading}
             >
               {loading && <Loader2 className="animate-spin" size={16} />}
-              Create account & start trial
+              Create account & continue
             </Button>
             <p className="text-sm text-muted-foreground">
               Already have an account?{" "}

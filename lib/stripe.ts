@@ -19,5 +19,4 @@ export const PRICING = {
   monthlyPriceGBP: 150,
   includedMinutes: 500,
   overagePerMinuteGBP: 0.1,
-  trialDays: Number(process.env.STRIPE_TRIAL_DAYS ?? "7"),
 } as const;

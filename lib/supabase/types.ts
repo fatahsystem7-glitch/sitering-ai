@@ -22,6 +22,8 @@ export type Profile = {
   stripe_customer_id: string | null;
   stripe_subscription_id: string | null;
   subscription_status: SubscriptionStatus;
+  is_admin: boolean;
+  role: string;
   created_at: string;
 };
 
@@ -55,6 +57,8 @@ export type CallLog = {
   location_postcode: string | null;
   urgency_level: UrgencyLevel;
   full_transcript: string | null;
+  ai_summary: string | null;
+  recording_url: string | null;
   duration_seconds: number;
   created_at: string;
 };

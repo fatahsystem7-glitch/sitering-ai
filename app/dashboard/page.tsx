@@ -66,8 +66,8 @@ export default async function DashboardPage() {
                 Your subscription isn&apos;t active yet
               </p>
               <p className="text-sm text-muted-foreground">
-                Start your 7-day free trial to activate 24/7 AI answering on
-                your number.
+                Activate your subscription — £150/mo — and your AI receptionist
+                goes live on your number today.
               </p>
             </div>
             <BillingButtons status={profile.subscription_status} />
@@ -79,7 +79,9 @@ export default async function DashboardPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">
             Good to see you
-            {profile.owner_name ? `, ${profile.owner_name.split(" ")[0]}` : ""}{" "}
+            {profile.owner_name
+              ? `, ${profile.owner_name.split(" ")[0]}`
+              : ""}{" "}
             👋
           </h1>
           <p className="text-sm text-muted-foreground">

@@ -1,23 +1,35 @@
+import Link from "next/link";
+import { ArrowRight, PhoneCall } from "lucide-react";
 import { Navbar } from "@/components/landing/navbar";
 import { Hero } from "@/components/landing/hero";
-import { Benefits } from "@/components/landing/benefits";
+import { Problem } from "@/components/landing/problem";
+import { Solution } from "@/components/landing/solution";
+import { DemoCall } from "@/components/landing/demo-call";
 import { HowItWorks } from "@/components/landing/how-it-works";
 import { Pricing } from "@/components/landing/pricing";
 import { Faq } from "@/components/landing/faq";
 import { Footer } from "@/components/landing/footer";
 import { Button } from "@/components/ui/button";
-import { ArrowRight } from "lucide-react";
-import Link from "next/link";
+import { DEMO_CALL_NUMBER, DEMO_CALL_TEL_LINK } from "@/lib/site";
 
 export default function LandingPage() {
   return (
     <div className="min-h-screen bg-background">
       <Navbar />
       <main>
+        {/* 1. Direct-response headline + subheadline */}
         <Hero />
-        <Benefits />
+        {/* 2. The Problem — missed calls = lost money */}
+        <Problem />
+        {/* 3. The Solution — 24/7 AI receptionist */}
+        <Solution />
+        {/* 4. Live Test Call demonstration */}
+        <DemoCall />
+        {/* 5. How it works — 3-step setup */}
         <HowItWorks />
+        {/* 6. Pricing + direct buy */}
         <Pricing />
+        {/* 7. FAQ & Guarantees */}
         <Faq />
 
         {/* Final CTA */}
@@ -30,14 +42,21 @@ export default function LandingPage() {
                 <span className="text-gradient">Answer it.</span>
               </h2>
               <p className="mx-auto mt-4 max-w-xl text-muted-foreground">
-                Join UK contractors who never miss a lead. Live in minutes, free
-                for 7 days.
+                Call the live demo and hear it for yourself — or get SiteRing AI
+                working for your business today.
               </p>
-              <Button size="lg" className="mt-8" asChild>
-                <Link href="/signup">
-                  Start 7-Day Trial <ArrowRight size={18} />
-                </Link>
-              </Button>
+              <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
+                <Button size="lg" asChild>
+                  <a href={DEMO_CALL_TEL_LINK}>
+                    <PhoneCall size={18} /> Call {DEMO_CALL_NUMBER}
+                  </a>
+                </Button>
+                <Button size="lg" variant="outline" asChild>
+                  <Link href="/signup">
+                    Get SiteRing AI <ArrowRight size={18} />
+                  </Link>
+                </Button>
+              </div>
             </div>
           </div>
         </section>
