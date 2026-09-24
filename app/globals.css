@@ -1,0 +1,135 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --paper: #f4efe6;
+  --ink: #17202a;
+  --muted: #4e5d6b;
+  --line: #e3d8c8;
+  --card: #fffaf3;
+  --card-2: #f7f1e7;
+  --brass: #a68445;
+  --brass-deep: #6f5424;
+  --signal: #9d3b2e;
+  --pine: #1d6a4a;
+  --shadow: 0 24px 60px rgba(23, 32, 42, 0.08);
+}
+
+.dark {
+  --paper: #10161c;
+  --ink: #f4efe6;
+  --muted: #c3b8a8;
+  --line: #2c3a46;
+  --card: #18222c;
+  --card-2: #121b23;
+  --brass: #e0c48a;
+  --brass-deep: #e0c48a;
+  --signal: #e08a7c;
+  --pine: #8dceae;
+  --shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+}
+
+@theme inline {
+  --font-sans: var(--font-outfit), "Avenir Next", "Segoe UI", sans-serif;
+  --font-serif: var(--font-fraunces), "Iowan Old Style", Palatino, serif;
+  --color-paper: var(--paper);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-card: var(--card);
+  --color-card-2: var(--card-2);
+  --color-brass: var(--brass);
+  --color-brass-deep: var(--brass-deep);
+  --color-signal: var(--signal);
+  --color-pine: var(--pine);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(1200px 500px at 90% -10%, rgba(166, 132, 69, 0.16), transparent 55%),
+    var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans);
+}
+
+::selection {
+  background: #e0c48a;
+  color: #17202a;
+}
+
+.serif {
+  font-family: var(--font-serif);
+}
+
+.rule {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--brass), transparent);
+}
+
+.pulse-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 999px;
+  background: #1d6a4a;
+  box-shadow: 0 0 0 0 rgba(29, 106, 74, 0.7);
+  animation: pulse 1.8s infinite;
+}
+
+.dark .pulse-dot {
+  background: #8dceae;
+}
+
+@keyframes pulse {
+  70% {
+    box-shadow: 0 0 0 8px rgba(29, 106, 74, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(29, 106, 74, 0);
+  }
+}
+
+.wave {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 18px;
+}
+
+.wave span {
+  width: 3px;
+  height: 60%;
+  border-radius: 99px;
+  background: var(--brass);
+  animation: wave 1.1s ease-in-out infinite;
+  transform-origin: bottom;
+}
+
+.wave span:nth-child(2) { animation-delay: 0.1s; height: 70%; }
+.wave span:nth-child(3) { animation-delay: 0.2s; height: 100%; }
+.wave span:nth-child(4) { animation-delay: 0.3s; height: 45%; }
+.wave span:nth-child(5) { animation-delay: 0.15s; height: 80%; }
+
+@keyframes wave {
+  0%, 100% { transform: scaleY(0.45); }
+  50% { transform: scaleY(1); }
+}
+
+input, select, textarea {
+  background: var(--card);
+  color: var(--ink);
+}
+
+input:focus, select:focus, textarea:focus {
+  outline: 2px solid var(--brass);
+  outline-offset: 1px;
+}
