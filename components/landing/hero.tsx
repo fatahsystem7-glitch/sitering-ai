@@ -4,7 +4,13 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { DEMO_CALL_NUMBER, DEMO_CALL_TEL_LINK } from "@/lib/site";
 
-export function Hero() {
+export function Hero({
+  demoNumber = DEMO_CALL_NUMBER,
+  demoTel = DEMO_CALL_TEL_LINK,
+}: {
+  demoNumber?: string;
+  demoTel?: string;
+}) {
   return (
     <section className="relative overflow-hidden">
       {/* Backdrop flourishes */}
@@ -21,8 +27,8 @@ export function Hero() {
         </Badge>
 
         <h1 className="max-w-4xl animate-fade-up text-4xl font-extrabold leading-[1.08] tracking-tight sm:text-5xl md:text-6xl">
-          Stop Losing <span className="text-gradient">£500+ Jobs</span> to
-          Voicemail While You&apos;re on the Tools — or Up a Ladder
+          24/7 AI Receptionist for UK Trade Contractors — Never Miss a
+          High-Value Lead Again.
         </h1>
 
         <p className="mt-6 max-w-2xl animate-fade-up text-lg text-muted-foreground md:text-xl">
@@ -34,8 +40,8 @@ export function Hero() {
 
         <div className="mt-8 flex animate-fade-up flex-col items-center gap-3 sm:flex-row">
           <Button size="lg" asChild>
-            <a href={DEMO_CALL_TEL_LINK}>
-              <PhoneCall size={18} /> Call the live demo: {DEMO_CALL_NUMBER}
+            <a href={demoTel}>
+              <PhoneCall size={18} /> Call the live demo: {demoNumber}
             </a>
           </Button>
           <Button size="lg" variant="outline" asChild>

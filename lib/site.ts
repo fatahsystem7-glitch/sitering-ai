@@ -6,6 +6,8 @@
  * LiveKit/Twilio demo agent is provisioned.
  */
 export const DEMO_CALL_NUMBER =
-  process.env.NEXT_PUBLIC_DEMO_CALL_NUMBER ?? "+44 20 3966 1248";
+  process.env.NEXT_PUBLIC_DEMO_PHONE_NUMBER ??
+  process.env.NEXT_PUBLIC_DEMO_CALL_NUMBER ??
+  "+44 20 3966 1248";
 
 export const DEMO_CALL_TEL_LINK = `tel:${DEMO_CALL_NUMBER.replace(/[^+\d]/g, "")}`;

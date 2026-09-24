@@ -6,6 +6,8 @@ import {
   BusinessDetailsForm,
   EmergencyNumberForm,
 } from "@/components/dashboard/settings-forms";
+import { ReceptionProfileForm } from "@/components/dashboard/reception-profile-form";
+import type { BusinessProfile } from "@/lib/supabase/types";
 import { BillingButtons } from "@/components/dashboard/billing-buttons";
 import {
   Card,
@@ -36,14 +38,20 @@ export default async function SettingsPage() {
   } = await supabase.auth.getUser();
   if (!user) redirect("/login?next=/dashboard/settings");
 
-  const [{ data: profile }, { data: telephony }] = await Promise.all([
-    supabase.from("profiles").select("*").eq("id", user.id).single(),
-    supabase
-      .from("telephony_provisioning")
-      .select("*")
-      .eq("user_id", user.id)
-      .single(),
-  ]);
+  const [{ data: profile }, { data: telephony }, { data: reception }] =
+    await Promise.all([
+      supabase.from("profiles").select("*").eq("id", user.id).single(),
+      supabase
+        .from("telephony_provisioning")
+        .select("*")
+        .eq("user_id", user.id)
+        .single(),
+      supabase
+        .from("business_profiles")
+        .select("*")
+        .eq("user_id", user.id)
+        .maybeSingle(),
+    ]);
 
   if (!profile) redirect("/login?next=/dashboard/settings");
 
@@ -61,6 +69,7 @@ export default async function SettingsPage() {
       </div>
 
       <BusinessDetailsForm profile={profile} />
+      <ReceptionProfileForm profile={(reception as BusinessProfile | null) ?? null} />
       <EmergencyNumberForm profile={profile} />
 
       <Card className="bg-card/70">

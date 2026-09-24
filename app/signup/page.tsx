@@ -76,7 +76,7 @@ export default function SignupPage() {
             trade_type: form.tradeType,
             emergency_forwarding_number: form.emergencyNumber.trim(),
           },
-          emailRedirectTo: `${window.location.origin}/auth/callback?next=/dashboard`,
+          emailRedirectTo: `${window.location.origin}/auth/callback?next=/dashboard/onboarding`,
         },
       });
       if (signUpError) throw signUpError;
@@ -84,7 +84,7 @@ export default function SignupPage() {
       // If email confirmation is disabled, a session exists → go to dashboard.
       // Otherwise show the "check your inbox" state.
       if (data.session) {
-        router.push("/dashboard");
+        router.push("/dashboard/onboarding");
         router.refresh();
       } else {
         router.push("/login?next=/dashboard");
@@ -214,8 +214,9 @@ export default function SignupPage() {
             </div>
             <p className="text-xs leading-relaxed text-muted-foreground">
               By signing up you agree to our Terms & Privacy Policy. Your
-              profile and telephony row are created automatically — your
-              dedicated UK number appears in the dashboard.
+              profile and telephony row are created automatically. Next
+              you&apos;ll set services, areas and the booking link — the same
+              form lives in Settings.
             </p>
           </CardContent>
           <CardFooter className="flex-col gap-4">

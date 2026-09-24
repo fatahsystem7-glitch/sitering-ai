@@ -14,7 +14,7 @@ import { Badge } from "@/components/ui/badge";
 const FEATURES = [
   "24/7 AI call answering — nights & weekends included",
   "Your own dedicated UK (+44) number",
-  "500 call minutes included every month (~150 calls)",
+  "500 Minutes included / month",
   "Job details sent to your phone in seconds",
   "Emergency calls forwarded to your mobile live",
   "Every call transcribed, logged & searchable",

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { LogOut, PhoneCall, Settings } from "lucide-react";
 import { signOut } from "@/app/dashboard/actions";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { Profile, TelephonyProvisioning } from "@/lib/supabase/types";
@@ -39,6 +40,7 @@ export function DashboardHeader({ profile, telephony }: Props) {
         </div>
 
         <div className="flex items-center gap-2">
+          <ThemeToggle />
           {isActive ? (
             <Badge>
               <span className="relative flex h-2 w-2">

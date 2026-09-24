@@ -128,3 +128,98 @@ export async function toggleForwarding(active: boolean): Promise<ActionResult> {
   revalidatePath("/dashboard");
   return { ok: true };
 }
+
+const receptionSchema = z.object({
+  service_areas: z.string().trim().max(500).optional().or(z.literal("")),
+  callout_fee: z.string().trim().max(200).optional().or(z.literal("")),
+  operating_hours: z.string().trim().max(300).optional().or(z.literal("")),
+  website_url: z.string().trim().max(500).optional().or(z.literal("")),
+  booking_url: z.string().trim().max(500).optional().or(z.literal("")),
+  custom_instructions: z.string().trim().max(4000).optional().or(z.literal("")),
+  services: z.string().max(20_000),
+});
+
+function parseServices(raw: string) {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { ok: false as const, error: "Services could not be read." };
+  }
+  if (!Array.isArray(parsed)) {
+    return { ok: false as const, error: "Services must be a list." };
+  }
+  const services = parsed
+    .map((item) => {
+      const row = item as { name?: unknown; price?: unknown; duration?: unknown };
+      return {
+        name: String(row.name ?? "").trim().slice(0, 120),
+        price: String(row.price ?? "").trim().slice(0, 80),
+        duration: String(row.duration ?? "").trim().slice(0, 80),
+      };
+    })
+    .filter((item) => item.name);
+  return { ok: true as const, services };
+}
+
+export async function saveReceptionProfile(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  const parsed = receptionSchema.safeParse({
+    service_areas: formData.get("service_areas"),
+    callout_fee: formData.get("callout_fee"),
+    operating_hours: formData.get("operating_hours"),
+    website_url: formData.get("website_url"),
+    booking_url: formData.get("booking_url"),
+    custom_instructions: formData.get("custom_instructions"),
+    services: formData.get("services") ?? "[]",
+  });
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input." };
+  }
+  const services = parseServices(parsed.data.services);
+  if (!services.ok) return services;
+
+  const supabase = createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+
+  const [{ data: profile }, { data: telephony }] = await Promise.all([
+    supabase
+      .from("profiles")
+      .select("business_name, trade_type")
+      .eq("id", user.id)
+      .single(),
+    supabase
+      .from("telephony_provisioning")
+      .select("assigned_phone_number")
+      .eq("user_id", user.id)
+      .maybeSingle(),
+  ]);
+
+  const { error } = await supabase.from("business_profiles").upsert(
+    {
+      user_id: user.id,
+      business_name: profile?.business_name ?? null,
+      trade_type: profile?.trade_type ?? null,
+      phone_number: telephony?.assigned_phone_number ?? null,
+      service_areas: parsed.data.service_areas || null,
+      callout_fee: parsed.data.callout_fee || null,
+      operating_hours: parsed.data.operating_hours || null,
+      website_url: parsed.data.website_url || null,
+      booking_url: parsed.data.booking_url || null,
+      custom_instructions: parsed.data.custom_instructions || null,
+      services: services.services,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "user_id" },
+  );
+
+  if (error) return { ok: false, error: error.message };
+  revalidatePath("/dashboard/settings");
+  revalidatePath("/dashboard/onboarding");
+  return { ok: true };
+}

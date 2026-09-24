@@ -9,6 +9,7 @@ import {
   type AdminMetrics,
 } from "@/lib/admin";
 import { MetricCards } from "@/components/admin/metric-cards";
+import { StackEconomics } from "@/components/admin/stack-economics";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatDateTime } from "@/lib/utils";
@@ -81,6 +82,7 @@ export default async function AdminOverviewPage() {
       </div>
 
       <MetricCards metrics={metrics} />
+      <StackEconomics />
 
       <div className="grid gap-6 lg:grid-cols-2">
         <Card className="bg-card/70">

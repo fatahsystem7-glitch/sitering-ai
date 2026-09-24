@@ -166,6 +166,8 @@ export async function POST(request: NextRequest) {
       location_postcode: payload.location_postcode ?? null,
       urgency_level: payload.urgency_level as UrgencyLevel,
       full_transcript: payload.full_transcript ?? null,
+      ai_summary: payload.ai_summary ?? null,
+      recording_url: payload.recording_url ?? null,
       duration_seconds: payload.duration_seconds,
     });
     if (logError)
@@ -189,6 +191,23 @@ export async function POST(request: NextRequest) {
 
     // 4. Report overage (if any) to Stripe metered billing
     await reportOverageToStripe(userId, newTotal ?? minutes, minutes, cap);
+
+    const profileMinutes = await admin
+      .from("business_profiles")
+      .update({
+        used_minutes: newTotal ?? minutes,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("user_id", userId);
+    if (
+      profileMinutes.error &&
+      !/does not exist|schema cache|business_profiles/i.test(profileMinutes.error.message)
+    ) {
+      console.warn(
+        "[call-end] business profile minutes not updated:",
+        profileMinutes.error.message,
+      );
+    }
 
     return NextResponse.json({
       ok: true,

@@ -21,7 +21,7 @@ appointment, and alerting the contractor instantly.
 | Database   | Supabase Postgres with Row Level Security                     |
 | Auth       | Supabase Auth (email/password)                                |
 | Billing    | Stripe subscriptions (no trial) + metered overage billing     |
-| Voice AI   | LiveKit / Twilio voice agent → `livekit-call-end` webhook     |
+| Voice AI   | Twilio UK SIP → LiveKit Agents → Cartesia Ink-2 STT + Sonic-3 TTS → OpenAI gpt-4o-mini |
 
 ## Project Structure
 
@@ -73,13 +73,26 @@ npm install
 cp .env.example .env.local
 ```
 
-### 3. Database — run the migrations (in order)
+### 3. Database
 
-Paste each file into your Supabase project's **SQL Editor** and run it:
+`npm run build` applies `supabase/migrations/*.sql` when `DATABASE_URL` is set.
+A missing URL warns and continues. A set URL that fails SQL stops the build.
+The SQL editor is not required.
 
-1. `supabase/migrations/01_schema.sql` — tables, RLS, auto-provisioning trigger
-2. `supabase/migrations/02_admin.sql` — `is_admin`/`role` flags, admin RLS
-   policies, `ai_summary`/`recording_url` columns, bootstrap-admin auto-flag
+1. `01_schema.sql` — profiles, telephony, call logs, RLS
+2. `02_admin.sql` — admin flags and call enrichment
+3. `03_business_profiles.sql` — receptionist profile, demo setting, callbacks
+
+### Voice agent
+
+The Next.js app does not run the call. From `agent/`:
+
+```bash
+npm install
+npm start
+```
+
+Inbound UK Twilio SIP enters LiveKit. The worker uses Cartesia Ink-2 for speech-to-text, Cartesia Sonic-3 for speech, and OpenAI `gpt-4o-mini`. End of turn comes from the STT stream. When the call ends it posts to `/api/webhooks/livekit-call-end`. `send_booking_link` texts `booking_url`.
 
 ### 4. Admin account
 

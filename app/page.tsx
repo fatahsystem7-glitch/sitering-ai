@@ -10,21 +10,26 @@ import { Pricing } from "@/components/landing/pricing";
 import { Faq } from "@/components/landing/faq";
 import { Footer } from "@/components/landing/footer";
 import { Button } from "@/components/ui/button";
-import { DEMO_CALL_NUMBER, DEMO_CALL_TEL_LINK } from "@/lib/site";
+import { getDemoPhoneNumber, telHref } from "@/lib/demo-phone";
 
-export default function LandingPage() {
+export const dynamic = "force-dynamic";
+
+export default async function LandingPage() {
+  const demoNumber = await getDemoPhoneNumber();
+  const demoTel = telHref(demoNumber);
+
   return (
     <div className="min-h-screen bg-background">
       <Navbar />
       <main>
         {/* 1. Direct-response headline + subheadline */}
-        <Hero />
+        <Hero demoNumber={demoNumber} demoTel={demoTel} />
         {/* 2. The Problem — missed calls = lost money */}
         <Problem />
         {/* 3. The Solution — 24/7 AI receptionist */}
         <Solution />
         {/* 4. Live Test Call demonstration */}
-        <DemoCall />
+        <DemoCall demoNumber={demoNumber} demoTel={demoTel} />
         {/* 5. How it works — 3-step setup */}
         <HowItWorks />
         {/* 6. Pricing + direct buy */}
@@ -47,8 +52,8 @@ export default function LandingPage() {
               </p>
               <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
                 <Button size="lg" asChild>
-                  <a href={DEMO_CALL_TEL_LINK}>
-                    <PhoneCall size={18} /> Call {DEMO_CALL_NUMBER}
+                  <a href={demoTel}>
+                    <PhoneCall size={18} /> Call {demoNumber}
                   </a>
                 </Button>
                 <Button size="lg" variant="outline" asChild>

@@ -27,7 +27,13 @@ const STEPS = [
   },
 ];
 
-export function DemoCall() {
+export function DemoCall({
+  demoNumber = DEMO_CALL_NUMBER,
+  demoTel = DEMO_CALL_TEL_LINK,
+}: {
+  demoNumber?: string;
+  demoTel?: string;
+}) {
   return (
     <section id="live-demo" className="container scroll-mt-20 py-16 md:py-24">
       <div className="card-glow relative overflow-hidden rounded-3xl border border-emerald-500/25 bg-gradient-to-b from-emerald-500/10 to-transparent p-8 text-center md:p-14">
@@ -47,15 +53,15 @@ export function DemoCall() {
           </p>
 
           <a
-            href={DEMO_CALL_TEL_LINK}
+            href={demoTel}
             className="mx-auto mt-8 block w-fit rounded-2xl bg-zinc-900 px-8 py-4 font-mono text-2xl font-bold tracking-tight text-emerald-300 ring-1 ring-emerald-500/30 transition-all hover:ring-emerald-500/60 md:text-3xl"
           >
-            {DEMO_CALL_NUMBER}
+            {demoNumber}
           </a>
 
           <div className="mt-6 flex justify-center">
             <Button size="lg" asChild>
-              <a href={DEMO_CALL_TEL_LINK}>
+              <a href={demoTel}>
                 <PhoneCall size={18} /> Call now — it answers 24/7
               </a>
             </Button>

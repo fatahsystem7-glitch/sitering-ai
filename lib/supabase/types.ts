@@ -66,6 +66,26 @@ export type CallLog = {
 export type CallLogInsert = Partial<CallLog> & Pick<CallLog, "user_id">;
 export type CallLogUpdate = Partial<Omit<CallLog, "id" | "created_at">>;
 
+export type ServiceItem = { name: string; price: string; duration: string };
+
+export type BusinessProfile = {
+  id: string;
+  user_id: string | null;
+  phone_number: string | null;
+  business_name: string | null;
+  trade_type: string | null;
+  service_areas: string | null;
+  callout_fee: string | null;
+  booking_url: string | null;
+  website_url: string | null;
+  custom_instructions: string | null;
+  services: ServiceItem[];
+  used_minutes: number;
+  operating_hours: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 /** Minimal Database shape for the typed Supabase client. */
 export type Database = {
   public: {
@@ -86,6 +106,32 @@ export type Database = {
         Row: CallLog;
         Insert: CallLogInsert;
         Update: CallLogUpdate;
+        Relationships: [];
+      };
+      business_profiles: {
+        Row: BusinessProfile;
+        Insert: { [key: string]: unknown };
+        Update: { [key: string]: unknown };
+        Relationships: [];
+      };
+      app_settings: {
+        Row: { key: string; value: string; updated_at: string };
+        Insert: { [key: string]: unknown };
+        Update: { [key: string]: unknown };
+        Relationships: [];
+      };
+      callback_requests: {
+        Row: {
+          id: string;
+          business_profile_id: string | null;
+          caller_number: string | null;
+          caller_name: string | null;
+          message: string | null;
+          urgency: string | null;
+          created_at: string;
+        };
+        Insert: { [key: string]: unknown };
+        Update: { [key: string]: unknown };
         Relationships: [];
       };
     };

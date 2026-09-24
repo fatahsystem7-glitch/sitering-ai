@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { signOut } from "@/app/dashboard/actions";
 import { Badge } from "@/components/ui/badge";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 

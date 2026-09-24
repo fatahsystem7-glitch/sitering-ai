@@ -19,7 +19,13 @@ Assure the caller that {{business_name}} has received their message and will con
 
 export interface ReceptionistPromptVars {
   business_name: string;
-  trade_type?: string;
+  trade_type?: string | null;
+  service_areas?: string | null;
+  callout_fee?: string | null;
+  operating_hours?: string | null;
+  booking_url?: string | null;
+  custom_instructions?: string | null;
+  services?: Array<{ name?: string; price?: string; duration?: string }> | null;
 }
 
 /**
@@ -38,6 +44,28 @@ export function renderReceptionistPrompt(vars: ReceptionistPromptVars): string {
   if (vars.trade_type) {
     prompt += `\n\nThe business is a ${vars.trade_type} contractor. Prioritise safety-critical issues (gas smells, live electrics, major leaks, break-ins) as emergencies and offer to escalate immediately.`;
   }
+
+  const services =
+    vars.services
+      ?.filter((service) => service.name)
+      .map(
+        (service) =>
+          `- ${service.name}: ${service.price || "price on request"} (${service.duration || "duration confirmed on booking"})`,
+      )
+      .join("\n") || "- No priced services are listed. Do not quote a price.";
+
+  prompt += `
+
+Facts you may use. Do not invent a price, fee, area, arrival time, or booking link.
+Service areas: ${vars.service_areas || "Not provided. Offer a callback instead of guessing coverage."}
+Operating hours: ${vars.operating_hours || "Not provided."}
+Emergency call-out fee: ${vars.callout_fee || "Not provided. Do not quote a fee."}
+Booking link: ${vars.booking_url || "Not provided. Do not claim a text was sent."}
+Services:
+${services}
+Owner notes: ${vars.custom_instructions || "None."}
+
+If the caller wants to book and a booking link is listed, call send_booking_link. If the text cannot be sent, call take_message.`;
 
   return prompt.replaceAll("{{trade_type}}", vars.trade_type ?? "trade");
 }
