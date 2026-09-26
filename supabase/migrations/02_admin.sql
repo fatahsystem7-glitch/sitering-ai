@@ -13,7 +13,7 @@ alter table public.profiles
   add column if not exists role text not null default 'customer';
 
 comment on column public.profiles.is_admin is 'True for SiteRing staff — grants full read/write via RLS admin policies.';
-comment on column public.profiles.role is "'admin' for staff, 'customer' for subscribers.";
+comment on column public.profiles.role is '''admin'' for staff, ''customer'' for subscribers.';
 
 -- ═════════════════════════════════════════════════════════════════
 -- 2. Call enrichment columns (AI summary + call recording)
