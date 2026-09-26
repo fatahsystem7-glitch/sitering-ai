@@ -45,8 +45,8 @@ export function Hero({
             </a>
           </Button>
           <Button size="lg" variant="outline" asChild>
-            <Link href="#pricing">
-              Get SiteRing AI — £150/mo <ArrowRight size={18} />
+            <Link href="#get-started">
+              Start free onboarding <ArrowRight size={18} />
             </Link>
           </Button>
         </div>

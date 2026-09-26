@@ -68,6 +68,26 @@ export type CallLogUpdate = Partial<Omit<CallLog, "id" | "created_at">>;
 
 export type ServiceItem = { name: string; price: string; duration: string };
 
+export type LeadStatus = "new" | "contacted" | "converted" | "archived";
+
+export type Lead = {
+  id: string;
+  business_name: string;
+  trade_type: string | null;
+  contact_name: string | null;
+  email: string;
+  phone_number: string | null;
+  service_requirements: string[];
+  service_area: string | null;
+  message: string | null;
+  source: string;
+  status: LeadStatus;
+  created_at: string;
+};
+
+export type LeadInsert = Partial<Lead> & Pick<Lead, "business_name" | "email">;
+export type LeadUpdate = Partial<Omit<Lead, "id" | "created_at">>;
+
 export type BusinessProfile = {
   id: string;
   user_id: string | null;
@@ -106,6 +126,12 @@ export type Database = {
         Row: CallLog;
         Insert: CallLogInsert;
         Update: CallLogUpdate;
+        Relationships: [];
+      };
+      leads: {
+        Row: Lead;
+        Insert: LeadInsert;
+        Update: LeadUpdate;
         Relationships: [];
       };
       business_profiles: {

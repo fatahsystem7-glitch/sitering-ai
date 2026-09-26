@@ -32,6 +32,12 @@ export function Navbar() {
             The Solution
           </Link>
           <Link
+            href="#services"
+            className="transition-colors hover:text-foreground"
+          >
+            What You Get
+          </Link>
+          <Link
             href="#live-demo"
             className="font-semibold text-emerald-400 transition-colors hover:text-emerald-300"
           >
@@ -59,7 +65,7 @@ export function Navbar() {
             <Link href="/login">Log in</Link>
           </Button>
           <Button size="sm" asChild>
-            <Link href="/signup">Get SiteRing AI</Link>
+            <Link href="#get-started">Get started</Link>
           </Button>
         </div>
       </div>
