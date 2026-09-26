@@ -67,7 +67,7 @@ export function Pricing() {
         </CardContent>
         <CardFooter className="flex-col gap-3">
           <Button size="lg" className="w-full" asChild>
-            <Link href="/signup">Get SiteRing AI Now</Link>
+            <Link href="/onboarding">Get SiteRing AI Now</Link>
           </Button>
           <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <ShieldCheck size={14} className="text-emerald-400" />

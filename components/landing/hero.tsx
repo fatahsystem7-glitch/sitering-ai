@@ -45,7 +45,7 @@ export function Hero({
             </a>
           </Button>
           <Button size="lg" variant="outline" asChild>
-            <Link href="#get-started">
+            <Link href="/onboarding">
               Start free onboarding <ArrowRight size={18} />
             </Link>
           </Button>

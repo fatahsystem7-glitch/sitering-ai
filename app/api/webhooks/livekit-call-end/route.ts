@@ -14,6 +14,7 @@ export const dynamic = "force-dynamic";
  * number that was dialled) must be present so we can attribute the call.
  */
 const callEndSchema = z.object({
+  client_id: z.string().uuid().optional(),
   user_id: z.string().uuid().optional(),
   assigned_number: z.string().min(5).optional(),
   caller_name: z.string().max(120).nullish(),
@@ -41,6 +42,22 @@ function isAuthorized(request: NextRequest): boolean {
   const header = request.headers.get("x-webhook-secret");
   const query = request.nextUrl.searchParams.get("secret");
   return header === secret || query === secret;
+}
+
+/** Resolve the Client ID (new onboarding model) from the payload. */
+async function resolveClientId(payload: CallEndPayload): Promise<string | null> {
+  if (payload.client_id) return payload.client_id;
+
+  if (payload.assigned_number) {
+    const { data } = await createAdminClient()
+      .from("clients")
+      .select("id")
+      .eq("assigned_phone_number", payload.assigned_number)
+      .maybeSingle();
+    return data?.id ?? null;
+  }
+
+  return null;
 }
 
 async function resolveUserId(payload: CallEndPayload): Promise<string | null> {
@@ -143,12 +160,58 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    // ── Client-ID model (public onboarding accounts) ──────────────
+    const clientId = await resolveClientId(payload);
+    if (clientId) {
+      const admin = createAdminClient();
+      const minutes = billableMinutes(payload.duration_seconds);
+
+      const { error: logError } = await admin.from("call_logs").insert({
+        client_id: clientId,
+        caller_name: payload.caller_name ?? null,
+        caller_phone: payload.caller_phone ?? null,
+        trade_issue_summary: payload.trade_issue_summary ?? null,
+        location_postcode: payload.location_postcode ?? null,
+        urgency_level: payload.urgency_level as UrgencyLevel,
+        full_transcript: payload.full_transcript ?? null,
+        ai_summary: payload.ai_summary ?? null,
+        recording_url: payload.recording_url ?? null,
+        duration_seconds: payload.duration_seconds,
+      });
+      if (logError)
+        throw new Error(`call_logs insert failed: ${logError.message}`);
+
+      const { data: newTotal, error: rpcError } = await admin.rpc(
+        "increment_client_minutes",
+        { p_client_id: clientId, p_minutes: minutes },
+      );
+      if (rpcError)
+        throw new Error(`increment_client_minutes failed: ${rpcError.message}`);
+
+      const { data: clientRow } = await admin
+        .from("clients")
+        .select("monthly_cap_minutes")
+        .eq("id", clientId)
+        .maybeSingle();
+      const clientCap = clientRow?.monthly_cap_minutes ?? PRICING.includedMinutes;
+
+      return NextResponse.json({
+        ok: true,
+        client_id: clientId,
+        minutes_billed: minutes,
+        minutes_used_this_period: newTotal,
+        monthly_cap_minutes: clientCap,
+        overage: Math.max(0, (newTotal ?? 0) - clientCap),
+      });
+    }
+
+    // ── Legacy Supabase-Auth model ────────────────────────────────
     const userId = await resolveUserId(payload);
     if (!userId) {
       return NextResponse.json(
         {
           error:
-            "Could not attribute call: provide user_id or a known assigned_number.",
+            "Could not attribute call: provide client_id, user_id or a known assigned_number.",
         },
         { status: 422 },
       );

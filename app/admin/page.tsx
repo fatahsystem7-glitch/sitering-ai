@@ -110,7 +110,7 @@ export default async function AdminOverviewPage() {
                     <div className="min-w-0">
                       <p className="truncate font-medium">
                         {c.caller_name ?? "Unknown"} ·{" "}
-                        {businessOf.get(c.user_id) ?? "—"}
+                        {businessOf.get(c.user_id ?? "") ?? "—"}
                       </p>
                       <p className="truncate text-xs text-muted-foreground">
                         {c.trade_issue_summary ?? "No summary"}

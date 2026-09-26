@@ -3,8 +3,8 @@
 import { Suspense, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Loader2, PhoneCall } from "lucide-react";
-import { createClient } from "@/lib/supabase/client";
+import { KeyRound, Loader2, PhoneCall } from "lucide-react";
+import { loginWithClientId } from "@/app/login/actions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -21,34 +21,25 @@ function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const next = searchParams.get("next") ?? "/dashboard";
-  const callbackError = searchParams.get("error");
 
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  const [clientId, setClientId] = useState(searchParams.get("client_id") ?? "");
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(
-    callbackError
-      ? "Sign-in link expired or invalid. Please log in below."
-      : null,
-  );
+  const [error, setError] = useState<string | null>(null);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setLoading(true);
     try {
-      const supabase = createClient();
-      const { error: signInError } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
-        password,
-      });
-      if (signInError) throw signInError;
-      router.push(next);
+      const result = await loginWithClientId(clientId);
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      router.push(next.startsWith("/dashboard") ? next : "/dashboard");
       router.refresh();
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Something went wrong signing in.",
-      );
+    } catch {
+      setError("Something went wrong signing in. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -64,7 +55,9 @@ function LoginForm() {
           <PhoneCall size={20} />
         </Link>
         <CardTitle className="text-2xl">Welcome back</CardTitle>
-        <CardDescription>Log in to your SiteRing AI dashboard</CardDescription>
+        <CardDescription>
+          Log in with the Client ID you received when you onboarded.
+        </CardDescription>
       </CardHeader>
       <form onSubmit={handleSubmit}>
         <CardContent className="space-y-4">
@@ -74,42 +67,41 @@ function LoginForm() {
             </p>
           )}
           <div className="space-y-2">
-            <Label htmlFor="email">Email</Label>
-            <Input
-              id="email"
-              type="email"
-              autoComplete="email"
-              required
-              placeholder="you@yourbusiness.co.uk"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="password">Password</Label>
-            <Input
-              id="password"
-              type="password"
-              autoComplete="current-password"
-              required
-              placeholder="••••••••"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
+            <Label htmlFor="client_id">Client ID</Label>
+            <div className="relative">
+              <KeyRound
+                size={16}
+                className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-muted-foreground"
+              />
+              <Input
+                id="client_id"
+                required
+                autoComplete="off"
+                spellCheck={false}
+                placeholder="3f2b8c10-9e7a-4a51-8d0e-6c1b2a9f4d33"
+                value={clientId}
+                onChange={(e) => setClientId(e.target.value)}
+                className="pl-10 font-mono text-sm"
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              It&apos;s the 36-character code shown at the end of onboarding and
+              emailed to you.
+            </p>
           </div>
         </CardContent>
         <CardFooter className="flex-col gap-4">
           <Button type="submit" className="w-full" disabled={loading}>
             {loading && <Loader2 className="animate-spin" size={16} />}
-            Log in
+            Open my dashboard
           </Button>
           <p className="text-sm text-muted-foreground">
-            New to SiteRing?{" "}
+            No account yet?{" "}
             <Link
-              href="/signup"
+              href="/onboarding"
               className="font-semibold text-emerald-400 hover:underline"
             >
-              Create your account
+              Start onboarding
             </Link>
           </p>
         </CardFooter>

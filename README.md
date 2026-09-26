@@ -11,6 +11,69 @@ appointment, and alerting the contractor instantly.
 
 ---
 
+## Public Onboarding → Client ID → Single Dashboard
+
+This is the one and only customer journey in this repo.
+
+1. **`/onboarding`** — a public, 5-step form (no login required):
+   1. Business details (name, trade, company/VAT number)
+   2. Account owner (name, email, mobile, emergency forwarding number)
+   3. Registered UK address (must match the proof of address)
+   4. AI receptionist setup (services, areas, hours, tone, instructions)
+   5. **Mandatory Telnyx verification uploads** — a copy of their
+      **ID (passport / driving licence)** and a copy of their
+      **proof of address**, plus a consent declaration.
+
+2. **`POST /api/onboarding`** (multipart) validates everything, inserts a row
+   into `public.clients` — which generates the **Client ID (UUID)** — uploads
+   both documents to the **private `client-documents` Storage bucket** under
+   `<client-id>/…`, records them in `public.client_documents`, and flips the
+   account to `telnyx_verification_status = 'submitted'`.
+
+3. The contractor is shown (and emailed) their **Client ID**. That UUID is the
+   only credential they need.
+
+4. **`/login`** takes the Client ID, verifies it against Supabase, and sets a
+   **HMAC-signed, HttpOnly session cookie** (`sitering_client`, 30 days) so the
+   raw UUID can never be forged or brute-forced from the browser.
+
+5. **`/dashboard`** is the single unified dashboard — no separate dashboards.
+   Tabs inside one page: **Overview** (verification status, usage, forwarding
+   setup, latest activity), **Call logs** (live logs + full transcripts),
+   **Messages** (SMS / WhatsApp / voicemail transcripts) and **Settings**
+   (account + receptionist profile, saved straight back to Supabase).
+
+`/admin` remains an internal, Supabase-Auth-gated staff area and is unrelated
+to the customer flow.
+
+### Data written to Supabase
+
+| Table | Purpose |
+| --- | --- |
+| `clients` | One row per account. `clients.id` **is** the Client ID. |
+| `client_documents` | Audit trail of each uploaded KYC document. |
+| `call_logs.client_id` | Calls attributed to a client. |
+| `message_logs` | Message/voicemail transcripts for the dashboard. |
+| Storage `client-documents` | Private bucket holding ID + proof of address. |
+
+Webhooks: `POST /api/webhooks/livekit-call-end` and
+`POST /api/webhooks/message` both accept `client_id` (or `assigned_number`)
+and authenticate with the `x-webhook-secret` header.
+
+### Required environment variables
+
+```bash
+NEXT_PUBLIC_SUPABASE_URL=       # Supabase → Project Settings → API
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=      # server-only; uploads + dashboard reads
+CLIENT_SESSION_SECRET=          # openssl rand -base64 48 (signs the session cookie)
+DATABASE_URL=                   # so `npm run build` applies supabase/migrations
+```
+
+Apply `supabase/migrations/05_client_onboarding.sql` (automatic on build when
+`DATABASE_URL` is set, or paste it into the Supabase SQL editor) before using
+the onboarding form.
+
 ## Tech Stack
 
 | Layer      | Choice                                                        |

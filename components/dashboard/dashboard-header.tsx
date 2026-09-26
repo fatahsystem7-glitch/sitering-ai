@@ -1,20 +1,20 @@
 import Link from "next/link";
-import { LogOut, PhoneCall, Settings } from "lucide-react";
+import { LogOut, PhoneCall } from "lucide-react";
 import { signOut } from "@/app/dashboard/actions";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import type { Profile, TelephonyProvisioning } from "@/lib/supabase/types";
+import type { Client } from "@/lib/supabase/types";
 
 interface Props {
-  profile: Profile;
-  telephony: TelephonyProvisioning | null;
+  client: Client;
 }
 
-export function DashboardHeader({ profile, telephony }: Props) {
-  const isActive =
-    profile.subscription_status === "active" ||
-    profile.subscription_status === "trialing";
+export function DashboardHeader({ client }: Props) {
+  const isLive =
+    client.onboarding_status === "live" ||
+    client.subscription_status === "active" ||
+    client.subscription_status === "trialing";
 
   return (
     <header className="sticky top-0 z-40 border-b border-border/60 bg-background/85 backdrop-blur-xl">
@@ -31,17 +31,15 @@ export function DashboardHeader({ profile, telephony }: Props) {
         <div className="mx-1 hidden h-6 w-px bg-border sm:block" />
 
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-semibold">
-            {profile.business_name}
-          </p>
+          <p className="truncate text-sm font-semibold">{client.business_name}</p>
           <p className="truncate font-mono text-xs text-muted-foreground">
-            {telephony?.assigned_phone_number ?? "Provisioning your UK number…"}
+            {client.assigned_phone_number ?? "Provisioning your UK number…"}
           </p>
         </div>
 
         <div className="flex items-center gap-2">
           <ThemeToggle />
-          {isActive ? (
+          {isLive ? (
             <Badge>
               <span className="relative flex h-2 w-2">
                 <span className="absolute inline-flex h-full w-full animate-pulse-ring rounded-full bg-emerald-400" />
@@ -50,15 +48,8 @@ export function DashboardHeader({ profile, telephony }: Props) {
               AI Active
             </Badge>
           ) : (
-            <Badge variant="warning">Inactive</Badge>
+            <Badge variant="warning">Setting up</Badge>
           )}
-
-          <Button variant="ghost" size="sm" asChild>
-            <Link href="/dashboard/settings">
-              <Settings size={16} />
-              <span className="hidden sm:inline">Settings</span>
-            </Link>
-          </Button>
 
           <form action={signOut}>
             <Button variant="outline" size="sm" type="submit">

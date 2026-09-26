@@ -66,7 +66,7 @@ export function ConversationsExplorer({
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return calls.filter((c) => {
-      const biz = directory[c.user_id];
+      const biz = directory[c.user_id ?? ""];
       const matchesQuery =
         !q ||
         [
@@ -133,7 +133,7 @@ export function ConversationsExplorer({
           </TableHeader>
           <TableBody>
             {filtered.map((call) => {
-              const biz = directory[call.user_id];
+              const biz = directory[call.user_id ?? ""];
               const repeats = call.caller_phone
                 ? (callCounts.get(call.caller_phone) ?? 1)
                 : 1;
@@ -217,7 +217,7 @@ export function ConversationsExplorer({
                   {selected.caller_name ?? "Unknown caller"}
                 </DialogTitle>
                 <DialogDescription>
-                  {directory[selected.user_id]?.business ?? "Unknown business"}{" "}
+                  {directory[selected.user_id ?? ""]?.business ?? "Unknown business"}{" "}
                   · {formatDateTime(selected.created_at)} ·{" "}
                   {formatDuration(selected.duration_seconds)}
                 </DialogDescription>

@@ -200,7 +200,7 @@ export function OnboardingFunnel() {
           </p>
           <div className="mt-7 flex flex-col gap-3 sm:flex-row">
             <Button size="lg" asChild>
-              <Link href="/signup">
+              <Link href="/onboarding">
                 Create your account <ArrowRight size={18} />
               </Link>
             </Button>

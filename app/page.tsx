@@ -105,7 +105,7 @@ export default async function LandingPage() {
                   </a>
                 </Button>
                 <Button size="lg" variant="outline" asChild>
-                  <Link href="/signup">
+                  <Link href="/onboarding">
                     Get SiteRing AI <ArrowRight size={18} />
                   </Link>
                 </Button>

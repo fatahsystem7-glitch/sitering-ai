@@ -50,7 +50,8 @@ export type TelephonyUpdate = Partial<
 
 export type CallLog = {
   id: string;
-  user_id: string;
+  user_id: string | null;
+  client_id?: string | null;
   caller_name: string | null;
   caller_phone: string | null;
   trade_issue_summary: string | null;
@@ -63,7 +64,7 @@ export type CallLog = {
   created_at: string;
 };
 
-export type CallLogInsert = Partial<CallLog> & Pick<CallLog, "user_id">;
+export type CallLogInsert = Partial<CallLog>;
 export type CallLogUpdate = Partial<Omit<CallLog, "id" | "created_at">>;
 
 export type ServiceItem = { name: string; price: string; duration: string };
@@ -87,6 +88,97 @@ export type Lead = {
 
 export type LeadInsert = Partial<Lead> & Pick<Lead, "business_name" | "email">;
 export type LeadUpdate = Partial<Omit<Lead, "id" | "created_at">>;
+
+export type TelnyxVerificationStatus =
+  | "pending"
+  | "submitted"
+  | "in_review"
+  | "verified"
+  | "rejected";
+
+export type OnboardingStatus =
+  | "submitted"
+  | "documents_received"
+  | "provisioning"
+  | "live"
+  | "paused";
+
+/**
+ * A trade contractor account created through the public onboarding form.
+ * `id` IS the Client ID (UUID) used to log into the single /dashboard.
+ */
+export type Client = {
+  id: string;
+  business_name: string;
+  trade_type: string | null;
+  company_number: string | null;
+  vat_number: string | null;
+  owner_name: string;
+  email: string;
+  phone_number: string | null;
+  emergency_forwarding_number: string;
+  address_line1: string | null;
+  address_line2: string | null;
+  city: string | null;
+  postcode: string | null;
+  country: string;
+  service_areas: string | null;
+  services_offered: string[];
+  operating_hours: string | null;
+  callout_fee: string | null;
+  greeting_style: string | null;
+  custom_instructions: string | null;
+  id_document_type: string | null;
+  id_document_path: string | null;
+  proof_of_address_path: string | null;
+  telnyx_verification_status: TelnyxVerificationStatus;
+  telnyx_verification_notes: string | null;
+  telnyx_number_order_id: string | null;
+  assigned_phone_number: string | null;
+  minutes_used_this_period: number;
+  monthly_cap_minutes: number;
+  subscription_status: SubscriptionStatus;
+  onboarding_status: OnboardingStatus;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ClientInsert = Partial<Client> &
+  Pick<Client, "business_name" | "owner_name" | "email">;
+export type ClientUpdate = Partial<Omit<Client, "id" | "created_at">>;
+
+export type ClientDocumentKind = "id_document" | "proof_of_address" | "other";
+
+export type ClientDocument = {
+  id: string;
+  client_id: string;
+  kind: ClientDocumentKind;
+  storage_path: string;
+  original_filename: string | null;
+  mime_type: string | null;
+  size_bytes: number | null;
+  created_at: string;
+};
+
+export type ClientDocumentInsert = Partial<ClientDocument> &
+  Pick<ClientDocument, "client_id" | "kind" | "storage_path">;
+
+export type MessageLog = {
+  id: string;
+  client_id: string;
+  direction: "inbound" | "outbound";
+  channel: "sms" | "whatsapp" | "voicemail" | "web";
+  contact_name: string | null;
+  contact_phone: string | null;
+  body: string | null;
+  transcript: string | null;
+  summary: string | null;
+  urgency_level: UrgencyLevel;
+  created_at: string;
+};
+
+export type MessageLogInsert = Partial<MessageLog> & Pick<MessageLog, "client_id">;
+export type MessageLogUpdate = Partial<Omit<MessageLog, "id" | "created_at">>;
 
 export type BusinessProfile = {
   id: string;
@@ -128,6 +220,24 @@ export type Database = {
         Update: CallLogUpdate;
         Relationships: [];
       };
+      clients: {
+        Row: Client;
+        Insert: ClientInsert;
+        Update: ClientUpdate;
+        Relationships: [];
+      };
+      client_documents: {
+        Row: ClientDocument;
+        Insert: ClientDocumentInsert;
+        Update: Partial<ClientDocument>;
+        Relationships: [];
+      };
+      message_logs: {
+        Row: MessageLog;
+        Insert: MessageLogInsert;
+        Update: MessageLogUpdate;
+        Relationships: [];
+      };
       leads: {
         Row: Lead;
         Insert: LeadInsert;
@@ -167,6 +277,10 @@ export type Database = {
     Functions: {
       increment_minutes: {
         Args: { p_user_id: string; p_minutes: number };
+        Returns: number;
+      };
+      increment_client_minutes: {
+        Args: { p_client_id: string; p_minutes: number };
         Returns: number;
       };
     };

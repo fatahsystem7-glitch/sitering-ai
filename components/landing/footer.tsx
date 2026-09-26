@@ -27,7 +27,7 @@ export function Footer() {
           <Link href="/login" className="hover:text-foreground">
             Log in
           </Link>
-          <Link href="/signup" className="hover:text-foreground">
+          <Link href="/onboarding" className="hover:text-foreground">
             Sign up
           </Link>
         </nav>
