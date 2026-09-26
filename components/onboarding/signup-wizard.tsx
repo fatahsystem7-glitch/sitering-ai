@@ -211,6 +211,7 @@ export function SignupWizard() {
   const [loading, setLoading] = useState(false);
   const [clientId, setClientId] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
+  const [emailSent, setEmailSent] = useState(false);
   const [copied, setCopied] = useState(false);
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
@@ -304,6 +305,7 @@ export function SignupWizard() {
       }
 
       setClientId(json.client_id as string);
+      setEmailSent(Boolean(json.email_sent));
       setWarning((json.warning as string) ?? null);
     } catch (err) {
       setError(
@@ -359,9 +361,16 @@ export function SignupWizard() {
           </div>
 
           <p className="text-sm text-muted-foreground">
-            Save this ID somewhere safe — it&apos;s the only credential you need
-            to log into your dashboard. We&apos;ve also emailed a copy to{" "}
-            <span className="font-medium text-foreground">{form.email}</span>.
+            Save this ID somewhere safe — it&apos;s the only credential you
+            need to log into your dashboard.{" "}
+            {emailSent ? (
+              <>
+                We&apos;ve also emailed a copy to{" "}
+                <span className="font-medium text-foreground">{form.email}</span>.
+              </>
+            ) : (
+              <>Screenshot it or copy it now.</>
+            )}
           </p>
 
           {warning && (

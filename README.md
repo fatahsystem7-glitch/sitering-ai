@@ -60,6 +60,21 @@ Webhooks: `POST /api/webhooks/livekit-call-end` and
 `POST /api/webhooks/message` both accept `client_id` (or `assigned_number`)
 and authenticate with the `x-webhook-secret` header.
 
+### Client ID email
+
+After the account is created, `POST /api/onboarding` emails the contractor
+their Client ID via **Resend** (`lib/email.ts`) and can copy your team in.
+It is fully optional and never blocks signup: without `RESEND_API_KEY` the
+send is skipped, the API returns `email_sent: false`, and the success screen
+says "Screenshot it or copy it now" instead of claiming an email was sent.
+
+```bash
+RESEND_API_KEY=            # resend.com/api-keys
+EMAIL_FROM="SiteRing AI <onboarding@yourdomain.co.uk>"  # verified domain
+EMAIL_REPLY_TO=            # optional
+ONBOARDING_NOTIFY_EMAIL=   # optional internal copy of each new signup
+```
+
 ### Required environment variables
 
 ```bash

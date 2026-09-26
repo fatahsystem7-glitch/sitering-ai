@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { sendClientIdEmail, sendNewClientNotification } from "@/lib/email";
 import type { ClientInsert } from "@/lib/supabase/types";
 
 export const dynamic = "force-dynamic";
@@ -273,10 +274,26 @@ export async function POST(request: Request) {
       })
       .eq("id", clientId);
 
+    const emailSentOnFailure = await sendClientIdEmail({
+      to: data.email,
+      ownerName: data.owner_name,
+      businessName: data.business_name,
+      clientId,
+    });
+    await sendNewClientNotification({
+      businessName: data.business_name,
+      ownerName: data.owner_name,
+      email: data.email,
+      phone: data.phone_number,
+      clientId,
+      documentsUploaded: false,
+    });
+
     return NextResponse.json(
       {
         ok: true,
         client_id: clientId,
+        email_sent: emailSentOnFailure,
         documents_uploaded: false,
         warning:
           "Your account was created, but we couldn't store your documents. Please email them to support so we can verify your number.",
@@ -285,8 +302,24 @@ export async function POST(request: Request) {
     );
   }
 
+  // Email the Client ID (best-effort — never blocks account creation).
+  const emailSent = await sendClientIdEmail({
+    to: data.email,
+    ownerName: data.owner_name,
+    businessName: data.business_name,
+    clientId,
+  });
+  await sendNewClientNotification({
+    businessName: data.business_name,
+    ownerName: data.owner_name,
+    email: data.email,
+    phone: data.phone_number,
+    clientId,
+    documentsUploaded: true,
+  });
+
   return NextResponse.json(
-    { ok: true, client_id: clientId, documents_uploaded: true },
+    { ok: true, client_id: clientId, email_sent: emailSent, documents_uploaded: true },
     { status: 201 },
   );
 }
