@@ -6,7 +6,7 @@ import {
   llm,
   voice,
 } from "@livekit/agents";
-import * as cartesia from "@livekit/agents-plugin-cartesia";
+import * as fishaudio from "@livekit/agents-plugin-fishaudio";
 import * as openai from "@livekit/agents-plugin-openai";
 import { createClient } from "@supabase/supabase-js";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -179,20 +179,25 @@ export default defineAgent({
         })}\n\nMinutes used this period: ${profile.minutes_used} of ${profile.monthly_cap}. Keep answering. Do not invent prices.`
       : "This UK number is not linked to a contractor yet. Apologise in one short British sentence and stop. Do not invent a business or a price.";
 
-    const tts = new cartesia.TTS({
-      apiKey: process.env.CARTESIA_API_KEY,
-      model: "sonic-3",
-      language: "en",
-      ...(process.env.CARTESIA_VOICE_ID?.trim()
-        ? { voice: process.env.CARTESIA_VOICE_ID.trim() }
+    // Fish Audio is the only TTS. `latencyMode: "low"` matters on a phone call:
+    // the caller hears the first syllable sooner, at a small cost in prosody.
+    const tts = new fishaudio.TTS({
+      apiKey: process.env.FISH_API_KEY,
+      model: "s2.1-pro",
+      latencyMode: (process.env.FISH_LATENCY_MODE as fishaudio.LatencyMode) ?? "low",
+      ...(process.env.FISH_VOICE_ID?.trim()
+        ? { voiceId: process.env.FISH_VOICE_ID.trim() }
         : {}),
     });
     tts.prewarm();
 
     const session = new voice.AgentSession({
-      stt: new cartesia.STT({
-        apiKey: process.env.CARTESIA_API_KEY,
-        model: "ink-2",
+      // Fish Audio has no STT, so listening moves to OpenAI on the existing key.
+      // gpt-4o-transcribe over the cheaper mini: callers read out postcodes and
+      // street names, where mini misfires often enough to cost a booking.
+      stt: new openai.STT({
+        apiKey: process.env.OPENAI_API_KEY,
+        model: "gpt-4o-transcribe",
         language: "en",
       }),
       llm: new openai.LLM({

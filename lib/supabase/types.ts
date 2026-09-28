@@ -89,12 +89,16 @@ export type Lead = {
 export type LeadInsert = Partial<Lead> & Pick<Lead, "business_name" | "email">;
 export type LeadUpdate = Partial<Omit<Lead, "id" | "created_at">>;
 
-export type TelnyxVerificationStatus =
+export type TwilioBundleStatus =
   | "pending"
-  | "submitted"
-  | "in_review"
-  | "verified"
-  | "rejected";
+  | "draft"
+  | "pending-review"
+  | "in-review"
+  | "twilio-rejected"
+  | "twilio-approved"
+  | "provisionally-approved";
+
+export type BusinessType = "sole_trader" | "limited_company";
 
 export type OnboardingStatus =
   | "submitted"
@@ -131,9 +135,16 @@ export type Client = {
   id_document_type: string | null;
   id_document_path: string | null;
   proof_of_address_path: string | null;
-  telnyx_verification_status: TelnyxVerificationStatus;
-  telnyx_verification_notes: string | null;
-  telnyx_number_order_id: string | null;
+  business_type: BusinessType;
+  twilio_bundle_status: TwilioBundleStatus;
+  twilio_rejection_reason: string | null;
+  twilio_phone_number_sid: string | null;
+  twilio_bundle_sid: string | null;
+  twilio_end_user_sid: string | null;
+  twilio_address_sid: string | null;
+  twilio_document_sids: string[];
+  twilio_submitted_at: string | null;
+  twilio_valid_until: string | null;
   assigned_phone_number: string | null;
   minutes_used_this_period: number;
   monthly_cap_minutes: number;

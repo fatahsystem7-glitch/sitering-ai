@@ -77,7 +77,7 @@ const STEP_META = [
   },
   {
     title: "Registered address",
-    description: "Telnyx requires a UK address that matches your proof of address.",
+    description: "Twilio requires a UK address that matches your proof of address.",
   },
   {
     title: "Receptionist setup",
@@ -85,7 +85,7 @@ const STEP_META = [
   },
   {
     title: "Identity verification",
-    description: "Required by Telnyx before we can issue your phone number.",
+    description: "Required by Twilio before we can issue your phone number.",
   },
 ];
 
@@ -337,7 +337,7 @@ export function SignupWizard() {
           </span>
           <CardTitle className="text-2xl">You&apos;re all set up</CardTitle>
           <CardDescription>
-            Your account and documents are saved. Verification with Telnyx
+            Your account and documents are saved. Verification with Twilio
             usually completes within one working day.
           </CardDescription>
         </CardHeader>
@@ -579,7 +579,7 @@ export function SignupWizard() {
               </div>
             </div>
             <p className="rounded-xl border border-border bg-muted/20 px-3.5 py-2.5 text-xs text-muted-foreground">
-              Telnyx must match this address to the proof of address you upload
+              Twilio must match this address to the proof of address you upload
               in the final step, so please use your registered business or home
               address.
             </p>
@@ -686,14 +686,14 @@ export function SignupWizard() {
           </>
         )}
 
-        {/* ── Step 5 · Telnyx verification uploads ── */}
+        {/* ── Step 5 · Twilio verification uploads ── */}
         {step === 5 && (
           <>
             <div className="flex gap-3 rounded-xl border border-emerald-500/25 bg-emerald-500/5 px-4 py-3">
               <ShieldCheck size={18} className="mt-0.5 shrink-0 text-emerald-400" />
               <p className="text-xs text-muted-foreground">
                 UK telecoms regulation means our carrier{" "}
-                <span className="font-semibold text-foreground">Telnyx</span>{" "}
+                <span className="font-semibold text-foreground">Twilio</span>{" "}
                 must verify who a phone number is issued to. Your documents are
                 stored encrypted in a private bucket, used only for
                 verification, and never shared.
@@ -744,7 +744,7 @@ export function SignupWizard() {
               />
               <span className="text-xs text-muted-foreground">
                 I confirm these documents are genuine and belong to me, and I
-                consent to SiteRing AI sharing them with Telnyx for the sole
+                consent to SiteRing AI sharing them with Twilio for the sole
                 purpose of verifying and issuing my business phone number.
               </span>
             </label>

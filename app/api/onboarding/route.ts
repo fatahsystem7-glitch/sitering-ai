@@ -31,7 +31,7 @@ const onboardingSchema = z.object({
   phone_number: z.string().trim().min(6, "A contact number is required").max(50),
   emergency_forwarding_number: z.string().trim().max(50).optional().or(z.literal("")),
 
-  // Address (Telnyx requires an address matching the proof of address)
+  // Address (Twilio requires an address matching the proof of address)
   address_line1: z.string().trim().min(2, "Address is required").max(200),
   address_line2: z.string().trim().max(200).optional().or(z.literal("")),
   city: z.string().trim().min(2, "Town/city is required").max(120),
@@ -134,7 +134,7 @@ export async function POST(request: Request) {
   }
   const data = parsed.data;
 
-  // ── Mandatory Telnyx verification uploads ───────────────────────
+  // ── Mandatory Twilio compliance uploads ───────────────────────
   const idDoc = validateFile(form.get("id_document"), "Photo ID (passport or driving licence)");
   const poaDoc = validateFile(form.get("proof_of_address"), "Proof of address");
 
@@ -201,7 +201,10 @@ export async function POST(request: Request) {
     greeting_style: data.greeting_style || null,
     custom_instructions: data.custom_instructions || null,
     id_document_type: data.id_document_type || null,
-    telnyx_verification_status: "pending",
+    // Sole traders and limited companies take different Twilio bundles, so the
+    // branch is decided once here rather than re-guessed at submission time.
+    business_type: data.company_number?.trim() ? "limited_company" : "sole_trader",
+    twilio_bundle_status: "pending",
     onboarding_status: "submitted",
   };
 
@@ -258,7 +261,7 @@ export async function POST(request: Request) {
       .update({
         id_document_path: idPath,
         proof_of_address_path: poaPath,
-        telnyx_verification_status: "submitted",
+        twilio_bundle_status: "pending",
         onboarding_status: "documents_received",
       })
       .eq("id", clientId);
@@ -268,8 +271,8 @@ export async function POST(request: Request) {
     await supabase
       .from("clients")
       .update({
-        telnyx_verification_status: "pending",
-        telnyx_verification_notes:
+        twilio_bundle_status: "pending",
+        twilio_rejection_reason:
           "Document upload failed during onboarding — re-upload required before number provisioning.",
       })
       .eq("id", clientId);
@@ -318,8 +321,47 @@ export async function POST(request: Request) {
     documentsUploaded: true,
   });
 
+  // Submit the UK regulatory bundle to Twilio. Deliberately best-effort: if
+  // Twilio is down or a document is unreadable the account still exists and
+  // the hourly poll retries, rather than the contractor seeing a failed signup.
+  let complianceSubmitted = false;
+  if (process.env.TWILIO_AUTO_SUBMIT !== "false") {
+    try {
+      const { data: fresh } = await supabase
+        .from("clients")
+        .select(
+          "id,business_name,business_type,company_number,owner_name,email,phone_number," +
+            "address_line1,address_line2,city,postcode,id_document_type,id_document_path," +
+            "proof_of_address_path",
+        )
+        .eq("id", clientId)
+        .maybeSingle();
+
+      if (fresh) {
+        const { submitUkBundle } = await import("@/lib/twilio/compliance");
+        const result = await submitUkBundle(fresh as never);
+        complianceSubmitted = result.submitted;
+      }
+    } catch (err) {
+      console.error("[onboarding] Twilio bundle submission failed:", err);
+      await supabase
+        .from("clients")
+        .update({
+          twilio_rejection_reason:
+            err instanceof Error ? err.message : "Bundle submission failed.",
+        })
+        .eq("id", clientId);
+    }
+  }
+
   return NextResponse.json(
-    { ok: true, client_id: clientId, email_sent: emailSent, documents_uploaded: true },
+    {
+      ok: true,
+      client_id: clientId,
+      email_sent: emailSent,
+      documents_uploaded: true,
+      compliance_submitted: complianceSubmitted,
+    },
     { status: 201 },
   );
 }

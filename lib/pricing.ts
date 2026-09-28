@@ -1,4 +1,4 @@
-/** Planning unit economics for Twilio + LiveKit + Cartesia + OpenAI. */
+/** Planning unit economics for Twilio + LiveKit + Fish Audio + OpenAI. */
 export const PLAN_PRICE_PENCE = 15_000;
 export const INCLUDED_MINUTES = 500;
 export const INFRA_COST_PENCE = 940;
@@ -8,16 +8,16 @@ export const STRIPE_FIXED_PENCE = 20;
 export const STACK_ALLOCATION_PENCE = {
   twilio: 350,
   livekit: 200,
-  cartesiaStt: 80,
-  cartesiaTts: 240,
+  openaiStt: 80,
+  fishTts: 240,
   openai: 70,
 } as const;
 
 export const STACK_LABELS: Record<keyof typeof STACK_ALLOCATION_PENCE, string> = {
   twilio: "Twilio telephony",
   livekit: "LiveKit orchestration",
-  cartesiaStt: "Cartesia Ink STT",
-  cartesiaTts: "Cartesia Sonic-3 TTS",
+  openaiStt: "OpenAI gpt-4o-transcribe STT",
+  fishTts: "Fish Audio s2.1-pro TTS",
   openai: "OpenAI gpt-4o-mini",
 };
 

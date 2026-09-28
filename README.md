@@ -99,7 +99,7 @@ the onboarding form.
 | Database   | Supabase Postgres with Row Level Security                     |
 | Auth       | Supabase Auth (email/password)                                |
 | Billing    | Stripe subscriptions (no trial) + metered overage billing     |
-| Voice AI   | Twilio UK SIP → LiveKit Agents → Cartesia Ink-2 STT + Sonic-3 TTS → OpenAI gpt-4o-mini |
+| Voice AI   | Twilio UK SIP → LiveKit Agents → OpenAI gpt-4o-transcribe STT + Fish Audio s2.1-pro TTS → OpenAI gpt-4o-mini |
 
 ## Project Structure
 
@@ -170,7 +170,7 @@ npm install
 npm start
 ```
 
-Inbound UK Twilio SIP enters LiveKit. The worker uses Cartesia Ink-2 for speech-to-text, Cartesia Sonic-3 for speech, and OpenAI `gpt-4o-mini`. End of turn comes from the STT stream. When the call ends it posts to `/api/webhooks/livekit-call-end`. `send_booking_link` texts `booking_url`.
+Inbound UK Twilio SIP enters LiveKit. The worker uses OpenAI `gpt-4o-transcribe` for speech-to-text, Fish Audio `s2.1-pro` for speech, and OpenAI `gpt-4o-mini` for the conversation. End of turn comes from the STT stream. When the call ends it posts to `/api/webhooks/livekit-call-end`. `send_booking_link` texts `booking_url`.
 
 ### 4. Admin account
 

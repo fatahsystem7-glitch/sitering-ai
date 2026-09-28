@@ -6,12 +6,12 @@ import { SignupWizard } from "@/components/onboarding/signup-wizard";
 export const metadata: Metadata = {
   title: "Create your account",
   description:
-    "Set up your SiteRing AI receptionist — business details, ID and proof of address for Telnyx number verification.",
+    "Set up your SiteRing AI receptionist — business details, ID and proof of address for Twilio number verification.",
 };
 
 const BENEFITS: [string, string][] = [
   ["Free setup", "We build and configure everything — you go live when you're happy."],
-  ["Your own UK number", "Verified with Telnyx and forwarded from your existing line."],
+  ["Your own UK number", "Verified with Twilio and forwarded from your existing line."],
   ["One dashboard", "Call logs, message transcripts and settings in a single place."],
   ["Documents stay private", "Stored encrypted, used only for carrier verification."],
 ];
@@ -44,7 +44,7 @@ export default function OnboardingPage() {
       <main className="container relative grid items-start gap-12 py-12 lg:grid-cols-2 lg:py-16">
         <div className="lg:sticky lg:top-16">
           <span className="text-sm font-semibold uppercase tracking-widest text-emerald-400">
-            Account creation · Telnyx verification
+            Account creation · Twilio verification
           </span>
           <h1 className="mt-3 text-3xl font-bold tracking-tight md:text-4xl">
             Get your AI receptionist answering in days, not weeks

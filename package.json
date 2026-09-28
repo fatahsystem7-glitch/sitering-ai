@@ -2,7 +2,7 @@
   "name": "sitering-ai",
   "version": "1.0.0",
   "private": true,
-  "description": "SiteRing AI — 24/7 AI Receptionist for UK Trade Contractors",
+  "description": "SiteRing AI \u2014 24/7 AI Receptionist for UK Trade Contractors",
   "scripts": {
     "dev": "next dev",
     "build": "node scripts/assert-speech-stack.mjs && node scripts/apply-migrations.mjs && next build",
@@ -11,7 +11,8 @@
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "format": "prettier --write \"**/*.{ts,tsx,css,json,md}\""
+    "format": "prettier --write \"**/*.{ts,tsx,css,json,md}\"",
+    "test": "node --import tsx --test test/*.test.ts"
   },
   "dependencies": {
     "@radix-ui/react-accordion": "^1.2.1",
@@ -34,6 +35,7 @@
     "stripe": "^16.12.0",
     "tailwind-merge": "^2.5.2",
     "tailwindcss-animate": "^1.0.7",
+    "twilio": "^5.3.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
@@ -47,6 +49,7 @@
     "prettier": "^3.3.3",
     "prettier-plugin-tailwindcss": "^0.6.8",
     "tailwindcss": "^3.4.13",
+    "tsx": "^4.23.15",
     "typescript": "^5.6.2"
   },
   "engines": {

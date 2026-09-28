@@ -37,7 +37,7 @@ export function StackEconomics() {
       </CardHeader>
       <CardContent>
         <p className="mb-4 text-sm text-muted-foreground">
-          Planning allocation for Twilio, LiveKit, Cartesia and OpenAI. The
+          Planning allocation for Twilio, LiveKit, Fish Audio and OpenAI. The
           parts sum to £9.40 for 500 minutes. This is not a live invoice feed.
         </p>
         <dl className="grid gap-2 text-sm sm:grid-cols-2">

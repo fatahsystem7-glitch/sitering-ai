@@ -5,6 +5,11 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const skip = new Set(["node_modules", ".next", ".git", "agent/node_modules"]);
 
+// Fish Audio is the only permitted TTS. Deepgram, Cartesia and ElevenLabs
+// have all been in this codebase at some point; this stops one creeping back
+// in through a copy-pasted snippet.
+const BANNED = /@deepgram|DEEPGRAM_|deepgram-sdk|cartesia|CARTESIA_|elevenlabs|ELEVENLABS_/i;
+
 async function walk(dir, found) {
   const entries = await readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
@@ -17,15 +22,15 @@ async function walk(dir, found) {
     if (entry.name === "assert-speech-stack.mjs") continue;
     if (!/\.(json|ts|tsx|mjs|js|md|sql|example)$/.test(entry.name)) continue;
     const text = await readFile(full, "utf8");
-    if (/@deepgram|DEEPGRAM_|deepgram-sdk/i.test(text)) found.push(full);
+    if (BANNED.test(text)) found.push(full);
   }
 }
 
 const found = [];
 await walk(root, found);
 if (found.length) {
-  console.error("Speech stack must not include Deepgram:");
+  console.error("Speech stack must be Fish Audio + OpenAI only. Found a banned provider in:");
   for (const file of found) console.error(`  - ${file}`);
   process.exit(1);
 }
-console.log("[speech] Cartesia/OpenAI stack check passed");
+console.log("[speech] Fish Audio + OpenAI stack check passed");

@@ -84,8 +84,8 @@ export async function sendClientIdEmail(args: {
     ``,
     `Open your dashboard: ${loginUrl}`,
     ``,
-    `We've received your ID and proof of address and submitted them to Telnyx`,
-    `for number verification. That usually completes within one working day —`,
+    `We've received your ID and proof of address and submitted them to Twilio`,
+    `for UK number verification. That usually takes one to three working days —`,
     `we'll email you as soon as your number is live.`,
     ``,
     `— The SiteRing AI team`,
@@ -118,7 +118,7 @@ export async function sendClientIdEmail(args: {
       <tr>
         <td style="padding:22px 28px 30px;">
           <p style="margin:0;font-size:14px;line-height:1.6;color:#9fb0b0;">
-            We've received your ID and proof of address and submitted them to <strong style="color:#e7ecec;">Telnyx</strong> for number verification. That usually completes within one working day — we'll email you the moment your number is live.
+            We've received your ID and proof of address and submitted them to <strong style="color:#e7ecec;">Twilio</strong> for UK number verification. That usually completes within one working day — we'll email you the moment your number is live.
           </p>
           <p style="margin:18px 0 0;font-size:13px;line-height:1.6;color:#6f8382;">
             Keep this Client ID somewhere safe — anyone with it can view your call logs. If you lose it, reply to this email and we'll help.
@@ -138,7 +138,77 @@ export async function sendClientIdEmail(args: {
   });
 }
 
-/** Optional internal heads-up so staff can start Telnyx verification. */
+
+/**
+ * Sent the moment the number is bought and routed. This is the email the
+ * contractor has actually been waiting for, so it leads with the number.
+ */
+export async function sendNumberLiveEmail(args: {
+  to: string;
+  ownerName: string;
+  businessName: string;
+  phoneNumber: string;
+  clientId: string;
+}): Promise<boolean> {
+  const { to, ownerName, businessName, phoneNumber, clientId } = args;
+  const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://sitering.ai").replace(/\/$/, "");
+  const loginUrl = `${appUrl}/login?client_id=${clientId}`;
+  const firstName = ownerName.split(" ")[0] || "there";
+
+  const text = [
+    `Hi ${firstName},`,
+    ``,
+    `Good news — your SiteRing AI number for ${businessName} is live:`,
+    phoneNumber,
+    ``,
+    `Your AI receptionist is answering it now. Try ringing it yourself first.`,
+    ``,
+    `To catch the calls you are missing today, forward your existing mobile to`,
+    `this number when you cannot answer. On most UK networks that is:`,
+    `  **21*${phoneNumber.replace(/\s/g, "")}#   (forward everything)`,
+    `  **61*${phoneNumber.replace(/\s/g, "")}#   (forward when unanswered)`,
+    ``,
+    `Your dashboard: ${loginUrl}`,
+    ``,
+    `— SiteRing AI`,
+  ].join("\n");
+
+  const html = `<!doctype html>
+<html>
+  <body style="margin:0;padding:24px;background:#0b1220;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;margin:0 auto;background:#111a2e;border-radius:12px;">
+      <tr><td style="padding:32px;">
+        <p style="margin:0 0 16px;color:#e7ecec;font-size:16px;">Hi ${escapeHtml(firstName)},</p>
+        <p style="margin:0 0 20px;color:#9fb0c4;font-size:15px;line-height:1.6;">
+          Your SiteRing AI number for <strong style="color:#e7ecec;">${escapeHtml(businessName)}</strong> is live and answering calls.
+        </p>
+        <p style="margin:0 0 24px;text-align:center;">
+          <span style="display:inline-block;padding:16px 28px;background:#0b1220;border:1px solid #23324a;border-radius:10px;color:#4ade80;font-size:24px;font-weight:700;letter-spacing:1px;">${escapeHtml(phoneNumber)}</span>
+        </p>
+        <p style="margin:0 0 20px;color:#9fb0c4;font-size:15px;line-height:1.6;">
+          Ring it yourself first to hear how it sounds. Then forward your existing
+          mobile to it when you cannot answer — on most UK networks dial
+          <strong style="color:#e7ecec;">**61*${escapeHtml(phoneNumber.replace(/\s/g, ""))}#</strong>
+          to forward only the calls you miss.
+        </p>
+        <p style="margin:0;">
+          <a href="${loginUrl}" style="display:inline-block;padding:12px 22px;background:#2563eb;border-radius:8px;color:#fff;text-decoration:none;font-size:15px;">Open your dashboard</a>
+        </p>
+      </td></tr>
+    </table>
+  </body>
+</html>`;
+
+  return send({
+    to,
+    subject: `Your SiteRing AI number is live: ${phoneNumber}`,
+    html,
+    text,
+    replyTo: process.env.EMAIL_REPLY_TO,
+  });
+}
+
+/** Optional internal heads-up so staff can watch the Twilio bundle. */
 export async function sendNewClientNotification(args: {
   businessName: string;
   ownerName: string;

@@ -39,27 +39,37 @@ const VERIFICATION_COPY: Record<
   pending: {
     label: "Documents needed",
     tone: "warning",
-    body: "We still need your ID and proof of address before Telnyx can issue your number.",
+    body: "We still need your ID and proof of address before we can register your number.",
   },
-  submitted: {
-    label: "Documents received",
+  draft: {
+    label: "Action required",
+    tone: "muted",
+    body: "Your documents did not pass Twilio's pre-check, so we have not submitted them yet. See the note below.",
+  },
+  "pending-review": {
+    label: "Submitted for review",
     tone: "warning",
-    body: "Your ID and proof of address are with us — we've submitted them to Telnyx for verification.",
+    body: "Your details are with Twilio for UK regulatory verification. This usually completes within one to three working days.",
   },
-  in_review: {
-    label: "In review with Telnyx",
+  "in-review": {
+    label: "In review with Twilio",
     tone: "warning",
-    body: "Telnyx is reviewing your documents. This usually completes within one working day.",
+    body: "Twilio is reviewing your documents now. We will email you the moment your number is live.",
   },
-  verified: {
+  "twilio-approved": {
     label: "Verified",
     tone: "default",
     body: "Your identity is verified and your number is cleared for use.",
   },
-  rejected: {
+  "provisionally-approved": {
+    label: "Provisionally approved",
+    tone: "default",
+    body: "Twilio has provisionally approved your bundle. Your number can go live while the final check completes.",
+  },
+  "twilio-rejected": {
     label: "Action required",
     tone: "muted",
-    body: "Telnyx couldn't verify your documents. Please contact support so we can re-submit.",
+    body: "Twilio could not verify your documents. The reason is below — once you re-upload we will re-submit straight away.",
   },
 };
 
@@ -87,7 +97,7 @@ export function ClientDashboard({
   const emergencies = calls.filter((c) => c.urgency_level === "Emergency").length;
 
   const verification =
-    VERIFICATION_COPY[client.telnyx_verification_status] ??
+    VERIFICATION_COPY[client.twilio_bundle_status] ??
     VERIFICATION_COPY.pending;
 
   async function copyClientId() {
@@ -165,7 +175,7 @@ export function ClientDashboard({
               </span>
               <div className="min-w-0 flex-1">
                 <p className="flex flex-wrap items-center gap-2 font-semibold">
-                  Telnyx verification
+                  Twilio verification
                   <Badge
                     variant={
                       verification.tone === "default" ? "default" : "warning"
