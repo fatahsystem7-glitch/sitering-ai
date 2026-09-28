@@ -1,0 +1,3130 @@
+From 7984f064554e6ff820b26efa9918dcd9052e522d Mon Sep 17 00:00:00 2001
+From: sitering-ai <dev@sitering.ai>
+Date: Mon, 28 Sep 2026 15:34:22 +0000
+Subject: [PATCH] feat: Fish Audio TTS, Twilio UK compliance, automatic number
+ provisioning
+
+Replaces Cartesia with Fish Audio (TTS) and OpenAI gpt-4o-transcribe (STT),
+and fills the gap where onboarding collected ID documents but never sent
+them anywhere:
+
+- Twilio regulatory bundles, branching sole trader vs limited company
+- migration 06: business_type, bundle SIDs, Twilio's own status spellings
+- automatic submission on signup, hourly poll, number purchase on approval
+- numbers are attached to the SIP trunk, or not bought at all
+- 'your number is live' email; build guards now ban Cartesia/ElevenLabs
+- 10 tests on the rejection parser
+
+Verified: 10/10 tests, tsc clean, next build 23 routes, migration tested
+against Postgres 17.
+---
+ .env.example                                 |  16 +-
+ README.md                                    |   4 +-
+ agent/package.json                           |   6 +-
+ agent/worker.ts                              |  25 +-
+ app/api/compliance/poll/route.ts             |  53 ++
+ app/api/compliance/submit/route.ts           |  96 ++
+ app/api/onboarding/route.ts                  |  56 +-
+ app/onboarding/page.tsx                      |   6 +-
+ components/admin/stack-economics.tsx         |   2 +-
+ components/dashboard/client-dashboard.tsx    |  34 +-
+ components/onboarding/signup-wizard.tsx      |  14 +-
+ lib/email.ts                                 |  78 +-
+ lib/pricing.ts                               |  10 +-
+ lib/supabase/types.ts                        |  27 +-
+ lib/twilio/client.ts                         |  29 +
+ lib/twilio/compliance.ts                     | 283 ++++++
+ lib/twilio/evaluation.ts                     | 133 +++
+ lib/twilio/provisioning.ts                   |  90 ++
+ lib/twilio/sync.ts                           | 148 ++++
+ package-lock.json                            | 887 ++++++++++++++++++-
+ package.json                                 |   7 +-
+ report                                       |   0
+ scripts/assert-speech-stack.mjs              |  11 +-
+ scripts/check-env.mjs                        |   2 +-
+ supabase/migrations/06_twilio_compliance.sql | 127 +++
+ test/evaluation.test.ts                      | 146 +++
+ vercel.json                                  |   9 +
+ 27 files changed, 2202 insertions(+), 97 deletions(-)
+ create mode 100644 app/api/compliance/poll/route.ts
+ create mode 100644 app/api/compliance/submit/route.ts
+ create mode 100644 lib/twilio/client.ts
+ create mode 100644 lib/twilio/compliance.ts
+ create mode 100644 lib/twilio/evaluation.ts
+ create mode 100644 lib/twilio/provisioning.ts
+ create mode 100644 lib/twilio/sync.ts
+ delete mode 100644 report
+ create mode 100644 supabase/migrations/06_twilio_compliance.sql
+ create mode 100644 test/evaluation.test.ts
+ create mode 100644 vercel.json
+
+diff --git a/.env.example b/.env.example
+index 3497376..4f7fb5a 100644
+--- a/.env.example
++++ b/.env.example
+@@ -45,8 +45,11 @@ LIVEKIT_AGENT_NAME="sitering-receptionist"
+ TWILIO_ACCOUNT_SID=""
+ TWILIO_AUTH_TOKEN=""
+ TWILIO_SMS_FROM=""
+-CARTESIA_API_KEY=""
+-CARTESIA_VOICE_ID=""
++FISH_API_KEY=""
++# Optional: Fish Audio voice clone id. Blank uses the plugin default voice.
++FISH_VOICE_ID=""
++# normal | balanced | low  (low = fastest first syllable, best for phone calls)
++FISH_LATENCY_MODE="low"
+ OPENAI_API_KEY=""
+ 
+ # LiveKit / Twilio voice agent → webhook auth
+@@ -56,3 +59,12 @@ VOICE_WEBHOOK_SECRET="change-me-to-a-long-random-string"
+ 
+ # Optional: where to provision / display numbers from
+ DEFAULT_NUMBER_COUNTRY_PREFIX="+44"
++
++# Twilio Elastic SIP Trunk that routes inbound calls into LiveKit.
++# REQUIRED before any number is purchased: a number bought without a trunk
++# rings into silence. Twilio Console → Elastic SIP Trunking → your trunk → SID.
++TWILIO_SIP_TRUNK_SID=""
++
++# Set by Vercel when you add a cron job; lets /api/compliance/poll
++# authenticate the scheduled run. Any long random string.
++CRON_SECRET=""
+diff --git a/README.md b/README.md
+index b7b07c2..3198aa2 100644
+--- a/README.md
++++ b/README.md
+@@ -99,7 +99,7 @@ the onboarding form.
+ | Database   | Supabase Postgres with Row Level Security                     |
+ | Auth       | Supabase Auth (email/password)                                |
+ | Billing    | Stripe subscriptions (no trial) + metered overage billing     |
+-| Voice AI   | Twilio UK SIP → LiveKit Agents → Cartesia Ink-2 STT + Sonic-3 TTS → OpenAI gpt-4o-mini |
++| Voice AI   | Twilio UK SIP → LiveKit Agents → OpenAI gpt-4o-transcribe STT + Fish Audio s2.1-pro TTS → OpenAI gpt-4o-mini |
+ 
+ ## Project Structure
+ 
+@@ -170,7 +170,7 @@ npm install
+ npm start
+ ```
+ 
+-Inbound UK Twilio SIP enters LiveKit. The worker uses Cartesia Ink-2 for speech-to-text, Cartesia Sonic-3 for speech, and OpenAI `gpt-4o-mini`. End of turn comes from the STT stream. When the call ends it posts to `/api/webhooks/livekit-call-end`. `send_booking_link` texts `booking_url`.
++Inbound UK Twilio SIP enters LiveKit. The worker uses OpenAI `gpt-4o-transcribe` for speech-to-text, Fish Audio `s2.1-pro` for speech, and OpenAI `gpt-4o-mini` for the conversation. End of turn comes from the STT stream. When the call ends it posts to `/api/webhooks/livekit-call-end`. `send_booking_link` texts `booking_url`.
+ 
+ ### 4. Admin account
+ 
+diff --git a/agent/package.json b/agent/package.json
+index 9b85208..61b5c7e 100644
+--- a/agent/package.json
++++ b/agent/package.json
+@@ -7,9 +7,9 @@
+     "dev": "node --import tsx worker.ts dev"
+   },
+   "dependencies": {
+-    "@livekit/agents": "1.9.0",
+-    "@livekit/agents-plugin-cartesia": "1.9.0",
+-    "@livekit/agents-plugin-openai": "1.9.0",
++    "@livekit/agents": "1.9.1",
++    "@livekit/agents-plugin-fishaudio": "1.9.1",
++    "@livekit/agents-plugin-openai": "1.9.1",
+     "@supabase/supabase-js": "^2.116.0",
+     "tsx": "^4.20.3",
+     "zod": "^3.23.8"
+diff --git a/agent/worker.ts b/agent/worker.ts
+index f7654e7..67ffbb6 100644
+--- a/agent/worker.ts
++++ b/agent/worker.ts
+@@ -6,7 +6,7 @@ import {
+   llm,
+   voice,
+ } from "@livekit/agents";
+-import * as cartesia from "@livekit/agents-plugin-cartesia";
++import * as fishaudio from "@livekit/agents-plugin-fishaudio";
+ import * as openai from "@livekit/agents-plugin-openai";
+ import { createClient } from "@supabase/supabase-js";
+ import { fileURLToPath, pathToFileURL } from "node:url";
+@@ -179,20 +179,25 @@ export default defineAgent({
+         })}\n\nMinutes used this period: ${profile.minutes_used} of ${profile.monthly_cap}. Keep answering. Do not invent prices.`
+       : "This UK number is not linked to a contractor yet. Apologise in one short British sentence and stop. Do not invent a business or a price.";
+ 
+-    const tts = new cartesia.TTS({
+-      apiKey: process.env.CARTESIA_API_KEY,
+-      model: "sonic-3",
+-      language: "en",
+-      ...(process.env.CARTESIA_VOICE_ID?.trim()
+-        ? { voice: process.env.CARTESIA_VOICE_ID.trim() }
++    // Fish Audio is the only TTS. `latencyMode: "low"` matters on a phone call:
++    // the caller hears the first syllable sooner, at a small cost in prosody.
++    const tts = new fishaudio.TTS({
++      apiKey: process.env.FISH_API_KEY,
++      model: "s2.1-pro",
++      latencyMode: (process.env.FISH_LATENCY_MODE as fishaudio.LatencyMode) ?? "low",
++      ...(process.env.FISH_VOICE_ID?.trim()
++        ? { voiceId: process.env.FISH_VOICE_ID.trim() }
+         : {}),
+     });
+     tts.prewarm();
+ 
+     const session = new voice.AgentSession({
+-      stt: new cartesia.STT({
+-        apiKey: process.env.CARTESIA_API_KEY,
+-        model: "ink-2",
++      // Fish Audio has no STT, so listening moves to OpenAI on the existing key.
++      // gpt-4o-transcribe over the cheaper mini: callers read out postcodes and
++      // street names, where mini misfires often enough to cost a booking.
++      stt: new openai.STT({
++        apiKey: process.env.OPENAI_API_KEY,
++        model: "gpt-4o-transcribe",
+         language: "en",
+       }),
+       llm: new openai.LLM({
+diff --git a/app/api/compliance/poll/route.ts b/app/api/compliance/poll/route.ts
+new file mode 100644
+index 0000000..2d2ce0d
+--- /dev/null
++++ b/app/api/compliance/poll/route.ts
+@@ -0,0 +1,53 @@
++import { NextResponse } from "next/server";
++
++import { twilioConfigured } from "@/lib/twilio/client";
++import { syncBundles } from "@/lib/twilio/sync";
++
++export const runtime = "nodejs";
++export const maxDuration = 300;
++// Never cached: this both reads Twilio and spends money.
++export const dynamic = "force-dynamic";
++
++/**
++ * GET/POST /api/compliance/poll
++ *
++ * Checks every in-flight Twilio bundle, buys numbers for the ones that have
++ * been approved, and records rejection reasons for the ones that have not.
++ * Runs on a Vercel cron (see vercel.json) and can be triggered by hand.
++ *
++ * Auth: Vercel's cron header, or the shared webhook secret.
++ */
++async function handle(request: Request) {
++  const secret = process.env.VOICE_WEBHOOK_SECRET;
++  const provided =
++    request.headers.get("x-webhook-secret") ??
++    new URL(request.url).searchParams.get("secret");
++
++  // Vercel signs its own cron invocations with CRON_SECRET.
++  const cronHeader = request.headers.get("authorization");
++  const isVercelCron =
++    Boolean(process.env.CRON_SECRET) && cronHeader === `Bearer ${process.env.CRON_SECRET}`;
++
++  if (!isVercelCron && (!secret || provided !== secret)) {
++    return NextResponse.json({ error: "Unauthorised" }, { status: 401 });
++  }
++
++  if (!twilioConfigured()) {
++    return NextResponse.json({ error: "Twilio is not configured" }, { status: 503 });
++  }
++
++  try {
++    const report = await syncBundles();
++
++    // Surface per-client failures as a 207 so a cron alert can fire while the
++    // successful provisions still stand.
++    const status = report.errors.length > 0 ? 207 : 200;
++    return NextResponse.json(report, { status });
++  } catch (cause) {
++    const message = cause instanceof Error ? cause.message : "Sync failed";
++    return NextResponse.json({ error: message }, { status: 500 });
++  }
++}
++
++export const GET = handle;
++export const POST = handle;
+diff --git a/app/api/compliance/submit/route.ts b/app/api/compliance/submit/route.ts
+new file mode 100644
+index 0000000..409a399
+--- /dev/null
++++ b/app/api/compliance/submit/route.ts
+@@ -0,0 +1,96 @@
++import { NextResponse } from "next/server";
++
++import { createAdminClient } from "@/lib/supabase/admin";
++import { twilioConfigured } from "@/lib/twilio/client";
++import { submitUkBundle, type ClientRow } from "@/lib/twilio/compliance";
++
++export const runtime = "nodejs";
++// Uploading two documents and waiting on Twilio's evaluation takes longer
++// than the default serverless budget.
++export const maxDuration = 60;
++
++const FIELDS =
++  "id,business_name,business_type,company_number,owner_name,email,phone_number," +
++  "address_line1,address_line2,city,postcode,id_document_type,id_document_path," +
++  "proof_of_address_path,twilio_bundle_sid,twilio_bundle_status";
++
++/**
++ * POST /api/compliance/submit  { client_id }
++ *
++ * Submits the contractor's UK regulatory bundle to Twilio. Internal:
++ * requires the same shared secret the voice webhooks use, because it spends
++ * money and uploads identity documents.
++ */
++export async function POST(request: Request) {
++  const secret = process.env.VOICE_WEBHOOK_SECRET;
++  const provided =
++    request.headers.get("x-webhook-secret") ??
++    new URL(request.url).searchParams.get("secret");
++
++  if (!secret || provided !== secret) {
++    return NextResponse.json({ error: "Unauthorised" }, { status: 401 });
++  }
++
++  if (!twilioConfigured()) {
++    return NextResponse.json({ error: "Twilio is not configured" }, { status: 503 });
++  }
++
++  let clientId: string | undefined;
++  try {
++    const body = (await request.json()) as { client_id?: string };
++    clientId = body.client_id;
++  } catch {
++    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
++  }
++
++  if (!clientId) {
++    return NextResponse.json({ error: "client_id is required" }, { status: 400 });
++  }
++
++  const supabase = createAdminClient();
++  const { data: client, error } = await supabase
++    .from("clients")
++    .select(FIELDS)
++    .eq("id", clientId)
++    .maybeSingle();
++
++  if (error) {
++    return NextResponse.json({ error: error.message }, { status: 500 });
++  }
++  if (!client) {
++    return NextResponse.json({ error: "No such client" }, { status: 404 });
++  }
++
++  // Re-submitting an in-flight bundle creates a duplicate Twilio charges for
++  // and a second review queue entry. Only a rejection may be retried.
++  const existing = client as unknown as { twilio_bundle_sid?: string; twilio_bundle_status?: string };
++  if (existing.twilio_bundle_sid && existing.twilio_bundle_status !== "twilio-rejected") {
++    return NextResponse.json(
++      {
++        error: "A bundle has already been submitted for this client.",
++        bundle_sid: existing.twilio_bundle_sid,
++        status: existing.twilio_bundle_status,
++      },
++      { status: 409 },
++    );
++  }
++
++  try {
++    const result = await submitUkBundle(client as unknown as ClientRow);
++
++    return NextResponse.json({
++      bundle_sid: result.bundleSid,
++      status: result.status,
++      submitted: result.submitted,
++      compliant: result.evaluation.compliant,
++      // When it is not compliant this is the sentence to show the contractor.
++      message: result.evaluation.summary,
++      failures: result.evaluation.failures,
++    });
++  } catch (cause) {
++    const message = cause instanceof Error ? cause.message : "Bundle submission failed";
++    // A failure here is usually a missing document or a bad address, which the
++    // contractor can fix — so it is a 422, not a 500.
++    return NextResponse.json({ error: message }, { status: 422 });
++  }
++}
+diff --git a/app/api/onboarding/route.ts b/app/api/onboarding/route.ts
+index e0d5d0f..6a06e7a 100644
+--- a/app/api/onboarding/route.ts
++++ b/app/api/onboarding/route.ts
+@@ -31,7 +31,7 @@ const onboardingSchema = z.object({
+   phone_number: z.string().trim().min(6, "A contact number is required").max(50),
+   emergency_forwarding_number: z.string().trim().max(50).optional().or(z.literal("")),
+ 
+-  // Address (Telnyx requires an address matching the proof of address)
++  // Address (Twilio requires an address matching the proof of address)
+   address_line1: z.string().trim().min(2, "Address is required").max(200),
+   address_line2: z.string().trim().max(200).optional().or(z.literal("")),
+   city: z.string().trim().min(2, "Town/city is required").max(120),
+@@ -134,7 +134,7 @@ export async function POST(request: Request) {
+   }
+   const data = parsed.data;
+ 
+-  // ── Mandatory Telnyx verification uploads ───────────────────────
++  // ── Mandatory Twilio compliance uploads ───────────────────────
+   const idDoc = validateFile(form.get("id_document"), "Photo ID (passport or driving licence)");
+   const poaDoc = validateFile(form.get("proof_of_address"), "Proof of address");
+ 
+@@ -201,7 +201,10 @@ export async function POST(request: Request) {
+     greeting_style: data.greeting_style || null,
+     custom_instructions: data.custom_instructions || null,
+     id_document_type: data.id_document_type || null,
+-    telnyx_verification_status: "pending",
++    // Sole traders and limited companies take different Twilio bundles, so the
++    // branch is decided once here rather than re-guessed at submission time.
++    business_type: data.company_number?.trim() ? "limited_company" : "sole_trader",
++    twilio_bundle_status: "pending",
+     onboarding_status: "submitted",
+   };
+ 
+@@ -258,7 +261,7 @@ export async function POST(request: Request) {
+       .update({
+         id_document_path: idPath,
+         proof_of_address_path: poaPath,
+-        telnyx_verification_status: "submitted",
++        twilio_bundle_status: "pending",
+         onboarding_status: "documents_received",
+       })
+       .eq("id", clientId);
+@@ -268,8 +271,8 @@ export async function POST(request: Request) {
+     await supabase
+       .from("clients")
+       .update({
+-        telnyx_verification_status: "pending",
+-        telnyx_verification_notes:
++        twilio_bundle_status: "pending",
++        twilio_rejection_reason:
+           "Document upload failed during onboarding — re-upload required before number provisioning.",
+       })
+       .eq("id", clientId);
+@@ -318,8 +321,47 @@ export async function POST(request: Request) {
+     documentsUploaded: true,
+   });
+ 
++  // Submit the UK regulatory bundle to Twilio. Deliberately best-effort: if
++  // Twilio is down or a document is unreadable the account still exists and
++  // the hourly poll retries, rather than the contractor seeing a failed signup.
++  let complianceSubmitted = false;
++  if (process.env.TWILIO_AUTO_SUBMIT !== "false") {
++    try {
++      const { data: fresh } = await supabase
++        .from("clients")
++        .select(
++          "id,business_name,business_type,company_number,owner_name,email,phone_number," +
++            "address_line1,address_line2,city,postcode,id_document_type,id_document_path," +
++            "proof_of_address_path",
++        )
++        .eq("id", clientId)
++        .maybeSingle();
++
++      if (fresh) {
++        const { submitUkBundle } = await import("@/lib/twilio/compliance");
++        const result = await submitUkBundle(fresh as never);
++        complianceSubmitted = result.submitted;
++      }
++    } catch (err) {
++      console.error("[onboarding] Twilio bundle submission failed:", err);
++      await supabase
++        .from("clients")
++        .update({
++          twilio_rejection_reason:
++            err instanceof Error ? err.message : "Bundle submission failed.",
++        })
++        .eq("id", clientId);
++    }
++  }
++
+   return NextResponse.json(
+-    { ok: true, client_id: clientId, email_sent: emailSent, documents_uploaded: true },
++    {
++      ok: true,
++      client_id: clientId,
++      email_sent: emailSent,
++      documents_uploaded: true,
++      compliance_submitted: complianceSubmitted,
++    },
+     { status: 201 },
+   );
+ }
+diff --git a/app/onboarding/page.tsx b/app/onboarding/page.tsx
+index 4280361..ec7006b 100644
+--- a/app/onboarding/page.tsx
++++ b/app/onboarding/page.tsx
+@@ -6,12 +6,12 @@ import { SignupWizard } from "@/components/onboarding/signup-wizard";
+ export const metadata: Metadata = {
+   title: "Create your account",
+   description:
+-    "Set up your SiteRing AI receptionist — business details, ID and proof of address for Telnyx number verification.",
++    "Set up your SiteRing AI receptionist — business details, ID and proof of address for Twilio number verification.",
+ };
+ 
+ const BENEFITS: [string, string][] = [
+   ["Free setup", "We build and configure everything — you go live when you're happy."],
+-  ["Your own UK number", "Verified with Telnyx and forwarded from your existing line."],
++  ["Your own UK number", "Verified with Twilio and forwarded from your existing line."],
+   ["One dashboard", "Call logs, message transcripts and settings in a single place."],
+   ["Documents stay private", "Stored encrypted, used only for carrier verification."],
+ ];
+@@ -44,7 +44,7 @@ export default function OnboardingPage() {
+       <main className="container relative grid items-start gap-12 py-12 lg:grid-cols-2 lg:py-16">
+         <div className="lg:sticky lg:top-16">
+           <span className="text-sm font-semibold uppercase tracking-widest text-emerald-400">
+-            Account creation · Telnyx verification
++            Account creation · Twilio verification
+           </span>
+           <h1 className="mt-3 text-3xl font-bold tracking-tight md:text-4xl">
+             Get your AI receptionist answering in days, not weeks
+diff --git a/components/admin/stack-economics.tsx b/components/admin/stack-economics.tsx
+index 92d3b1c..309c5fc 100644
+--- a/components/admin/stack-economics.tsx
++++ b/components/admin/stack-economics.tsx
+@@ -37,7 +37,7 @@ export function StackEconomics() {
+       </CardHeader>
+       <CardContent>
+         <p className="mb-4 text-sm text-muted-foreground">
+-          Planning allocation for Twilio, LiveKit, Cartesia and OpenAI. The
++          Planning allocation for Twilio, LiveKit, Fish Audio and OpenAI. The
+           parts sum to £9.40 for 500 minutes. This is not a live invoice feed.
+         </p>
+         <dl className="grid gap-2 text-sm sm:grid-cols-2">
+diff --git a/components/dashboard/client-dashboard.tsx b/components/dashboard/client-dashboard.tsx
+index b20186e..9e5ad60 100644
+--- a/components/dashboard/client-dashboard.tsx
++++ b/components/dashboard/client-dashboard.tsx
+@@ -39,27 +39,37 @@ const VERIFICATION_COPY: Record<
+   pending: {
+     label: "Documents needed",
+     tone: "warning",
+-    body: "We still need your ID and proof of address before Telnyx can issue your number.",
++    body: "We still need your ID and proof of address before we can register your number.",
+   },
+-  submitted: {
+-    label: "Documents received",
++  draft: {
++    label: "Action required",
++    tone: "muted",
++    body: "Your documents did not pass Twilio's pre-check, so we have not submitted them yet. See the note below.",
++  },
++  "pending-review": {
++    label: "Submitted for review",
+     tone: "warning",
+-    body: "Your ID and proof of address are with us — we've submitted them to Telnyx for verification.",
++    body: "Your details are with Twilio for UK regulatory verification. This usually completes within one to three working days.",
+   },
+-  in_review: {
+-    label: "In review with Telnyx",
++  "in-review": {
++    label: "In review with Twilio",
+     tone: "warning",
+-    body: "Telnyx is reviewing your documents. This usually completes within one working day.",
++    body: "Twilio is reviewing your documents now. We will email you the moment your number is live.",
+   },
+-  verified: {
++  "twilio-approved": {
+     label: "Verified",
+     tone: "default",
+     body: "Your identity is verified and your number is cleared for use.",
+   },
+-  rejected: {
++  "provisionally-approved": {
++    label: "Provisionally approved",
++    tone: "default",
++    body: "Twilio has provisionally approved your bundle. Your number can go live while the final check completes.",
++  },
++  "twilio-rejected": {
+     label: "Action required",
+     tone: "muted",
+-    body: "Telnyx couldn't verify your documents. Please contact support so we can re-submit.",
++    body: "Twilio could not verify your documents. The reason is below — once you re-upload we will re-submit straight away.",
+   },
+ };
+ 
+@@ -87,7 +97,7 @@ export function ClientDashboard({
+   const emergencies = calls.filter((c) => c.urgency_level === "Emergency").length;
+ 
+   const verification =
+-    VERIFICATION_COPY[client.telnyx_verification_status] ??
++    VERIFICATION_COPY[client.twilio_bundle_status] ??
+     VERIFICATION_COPY.pending;
+ 
+   async function copyClientId() {
+@@ -165,7 +175,7 @@ export function ClientDashboard({
+               </span>
+               <div className="min-w-0 flex-1">
+                 <p className="flex flex-wrap items-center gap-2 font-semibold">
+-                  Telnyx verification
++                  Twilio verification
+                   <Badge
+                     variant={
+                       verification.tone === "default" ? "default" : "warning"
+diff --git a/components/onboarding/signup-wizard.tsx b/components/onboarding/signup-wizard.tsx
+index c927a1c..69f8f10 100644
+--- a/components/onboarding/signup-wizard.tsx
++++ b/components/onboarding/signup-wizard.tsx
+@@ -77,7 +77,7 @@ const STEP_META = [
+   },
+   {
+     title: "Registered address",
+-    description: "Telnyx requires a UK address that matches your proof of address.",
++    description: "Twilio requires a UK address that matches your proof of address.",
+   },
+   {
+     title: "Receptionist setup",
+@@ -85,7 +85,7 @@ const STEP_META = [
+   },
+   {
+     title: "Identity verification",
+-    description: "Required by Telnyx before we can issue your phone number.",
++    description: "Required by Twilio before we can issue your phone number.",
+   },
+ ];
+ 
+@@ -337,7 +337,7 @@ export function SignupWizard() {
+           </span>
+           <CardTitle className="text-2xl">You&apos;re all set up</CardTitle>
+           <CardDescription>
+-            Your account and documents are saved. Verification with Telnyx
++            Your account and documents are saved. Verification with Twilio
+             usually completes within one working day.
+           </CardDescription>
+         </CardHeader>
+@@ -579,7 +579,7 @@ export function SignupWizard() {
+               </div>
+             </div>
+             <p className="rounded-xl border border-border bg-muted/20 px-3.5 py-2.5 text-xs text-muted-foreground">
+-              Telnyx must match this address to the proof of address you upload
++              Twilio must match this address to the proof of address you upload
+               in the final step, so please use your registered business or home
+               address.
+             </p>
+@@ -686,14 +686,14 @@ export function SignupWizard() {
+           </>
+         )}
+ 
+-        {/* ── Step 5 · Telnyx verification uploads ── */}
++        {/* ── Step 5 · Twilio verification uploads ── */}
+         {step === 5 && (
+           <>
+             <div className="flex gap-3 rounded-xl border border-emerald-500/25 bg-emerald-500/5 px-4 py-3">
+               <ShieldCheck size={18} className="mt-0.5 shrink-0 text-emerald-400" />
+               <p className="text-xs text-muted-foreground">
+                 UK telecoms regulation means our carrier{" "}
+-                <span className="font-semibold text-foreground">Telnyx</span>{" "}
++                <span className="font-semibold text-foreground">Twilio</span>{" "}
+                 must verify who a phone number is issued to. Your documents are
+                 stored encrypted in a private bucket, used only for
+                 verification, and never shared.
+@@ -744,7 +744,7 @@ export function SignupWizard() {
+               />
+               <span className="text-xs text-muted-foreground">
+                 I confirm these documents are genuine and belong to me, and I
+-                consent to SiteRing AI sharing them with Telnyx for the sole
++                consent to SiteRing AI sharing them with Twilio for the sole
+                 purpose of verifying and issuing my business phone number.
+               </span>
+             </label>
+diff --git a/lib/email.ts b/lib/email.ts
+index 1a975f9..f3a0e50 100644
+--- a/lib/email.ts
++++ b/lib/email.ts
+@@ -84,8 +84,8 @@ export async function sendClientIdEmail(args: {
+     ``,
+     `Open your dashboard: ${loginUrl}`,
+     ``,
+-    `We've received your ID and proof of address and submitted them to Telnyx`,
+-    `for number verification. That usually completes within one working day —`,
++    `We've received your ID and proof of address and submitted them to Twilio`,
++    `for UK number verification. That usually takes one to three working days —`,
+     `we'll email you as soon as your number is live.`,
+     ``,
+     `— The SiteRing AI team`,
+@@ -118,7 +118,7 @@ export async function sendClientIdEmail(args: {
+       <tr>
+         <td style="padding:22px 28px 30px;">
+           <p style="margin:0;font-size:14px;line-height:1.6;color:#9fb0b0;">
+-            We've received your ID and proof of address and submitted them to <strong style="color:#e7ecec;">Telnyx</strong> for number verification. That usually completes within one working day — we'll email you the moment your number is live.
++            We've received your ID and proof of address and submitted them to <strong style="color:#e7ecec;">Twilio</strong> for UK number verification. That usually completes within one working day — we'll email you the moment your number is live.
+           </p>
+           <p style="margin:18px 0 0;font-size:13px;line-height:1.6;color:#6f8382;">
+             Keep this Client ID somewhere safe — anyone with it can view your call logs. If you lose it, reply to this email and we'll help.
+@@ -138,7 +138,77 @@ export async function sendClientIdEmail(args: {
+   });
+ }
+ 
+-/** Optional internal heads-up so staff can start Telnyx verification. */
++
++/**
++ * Sent the moment the number is bought and routed. This is the email the
++ * contractor has actually been waiting for, so it leads with the number.
++ */
++export async function sendNumberLiveEmail(args: {
++  to: string;
++  ownerName: string;
++  businessName: string;
++  phoneNumber: string;
++  clientId: string;
++}): Promise<boolean> {
++  const { to, ownerName, businessName, phoneNumber, clientId } = args;
++  const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://sitering.ai").replace(/\/$/, "");
++  const loginUrl = `${appUrl}/login?client_id=${clientId}`;
++  const firstName = ownerName.split(" ")[0] || "there";
++
++  const text = [
++    `Hi ${firstName},`,
++    ``,
++    `Good news — your SiteRing AI number for ${businessName} is live:`,
++    phoneNumber,
++    ``,
++    `Your AI receptionist is answering it now. Try ringing it yourself first.`,
++    ``,
++    `To catch the calls you are missing today, forward your existing mobile to`,
++    `this number when you cannot answer. On most UK networks that is:`,
++    `  **21*${phoneNumber.replace(/\s/g, "")}#   (forward everything)`,
++    `  **61*${phoneNumber.replace(/\s/g, "")}#   (forward when unanswered)`,
++    ``,
++    `Your dashboard: ${loginUrl}`,
++    ``,
++    `— SiteRing AI`,
++  ].join("\n");
++
++  const html = `<!doctype html>
++<html>
++  <body style="margin:0;padding:24px;background:#0b1220;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
++    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;margin:0 auto;background:#111a2e;border-radius:12px;">
++      <tr><td style="padding:32px;">
++        <p style="margin:0 0 16px;color:#e7ecec;font-size:16px;">Hi ${escapeHtml(firstName)},</p>
++        <p style="margin:0 0 20px;color:#9fb0c4;font-size:15px;line-height:1.6;">
++          Your SiteRing AI number for <strong style="color:#e7ecec;">${escapeHtml(businessName)}</strong> is live and answering calls.
++        </p>
++        <p style="margin:0 0 24px;text-align:center;">
++          <span style="display:inline-block;padding:16px 28px;background:#0b1220;border:1px solid #23324a;border-radius:10px;color:#4ade80;font-size:24px;font-weight:700;letter-spacing:1px;">${escapeHtml(phoneNumber)}</span>
++        </p>
++        <p style="margin:0 0 20px;color:#9fb0c4;font-size:15px;line-height:1.6;">
++          Ring it yourself first to hear how it sounds. Then forward your existing
++          mobile to it when you cannot answer — on most UK networks dial
++          <strong style="color:#e7ecec;">**61*${escapeHtml(phoneNumber.replace(/\s/g, ""))}#</strong>
++          to forward only the calls you miss.
++        </p>
++        <p style="margin:0;">
++          <a href="${loginUrl}" style="display:inline-block;padding:12px 22px;background:#2563eb;border-radius:8px;color:#fff;text-decoration:none;font-size:15px;">Open your dashboard</a>
++        </p>
++      </td></tr>
++    </table>
++  </body>
++</html>`;
++
++  return send({
++    to,
++    subject: `Your SiteRing AI number is live: ${phoneNumber}`,
++    html,
++    text,
++    replyTo: process.env.EMAIL_REPLY_TO,
++  });
++}
++
++/** Optional internal heads-up so staff can watch the Twilio bundle. */
+ export async function sendNewClientNotification(args: {
+   businessName: string;
+   ownerName: string;
+diff --git a/lib/pricing.ts b/lib/pricing.ts
+index c378bec..7e2b2f9 100644
+--- a/lib/pricing.ts
++++ b/lib/pricing.ts
+@@ -1,4 +1,4 @@
+-/** Planning unit economics for Twilio + LiveKit + Cartesia + OpenAI. */
++/** Planning unit economics for Twilio + LiveKit + Fish Audio + OpenAI. */
+ export const PLAN_PRICE_PENCE = 15_000;
+ export const INCLUDED_MINUTES = 500;
+ export const INFRA_COST_PENCE = 940;
+@@ -8,16 +8,16 @@ export const STRIPE_FIXED_PENCE = 20;
+ export const STACK_ALLOCATION_PENCE = {
+   twilio: 350,
+   livekit: 200,
+-  cartesiaStt: 80,
+-  cartesiaTts: 240,
++  openaiStt: 80,
++  fishTts: 240,
+   openai: 70,
+ } as const;
+ 
+ export const STACK_LABELS: Record<keyof typeof STACK_ALLOCATION_PENCE, string> = {
+   twilio: "Twilio telephony",
+   livekit: "LiveKit orchestration",
+-  cartesiaStt: "Cartesia Ink STT",
+-  cartesiaTts: "Cartesia Sonic-3 TTS",
++  openaiStt: "OpenAI gpt-4o-transcribe STT",
++  fishTts: "Fish Audio s2.1-pro TTS",
+   openai: "OpenAI gpt-4o-mini",
+ };
+ 
+diff --git a/lib/supabase/types.ts b/lib/supabase/types.ts
+index d1edbbb..b835f5b 100644
+--- a/lib/supabase/types.ts
++++ b/lib/supabase/types.ts
+@@ -89,12 +89,16 @@ export type Lead = {
+ export type LeadInsert = Partial<Lead> & Pick<Lead, "business_name" | "email">;
+ export type LeadUpdate = Partial<Omit<Lead, "id" | "created_at">>;
+ 
+-export type TelnyxVerificationStatus =
++export type TwilioBundleStatus =
+   | "pending"
+-  | "submitted"
+-  | "in_review"
+-  | "verified"
+-  | "rejected";
++  | "draft"
++  | "pending-review"
++  | "in-review"
++  | "twilio-rejected"
++  | "twilio-approved"
++  | "provisionally-approved";
++
++export type BusinessType = "sole_trader" | "limited_company";
+ 
+ export type OnboardingStatus =
+   | "submitted"
+@@ -131,9 +135,16 @@ export type Client = {
+   id_document_type: string | null;
+   id_document_path: string | null;
+   proof_of_address_path: string | null;
+-  telnyx_verification_status: TelnyxVerificationStatus;
+-  telnyx_verification_notes: string | null;
+-  telnyx_number_order_id: string | null;
++  business_type: BusinessType;
++  twilio_bundle_status: TwilioBundleStatus;
++  twilio_rejection_reason: string | null;
++  twilio_phone_number_sid: string | null;
++  twilio_bundle_sid: string | null;
++  twilio_end_user_sid: string | null;
++  twilio_address_sid: string | null;
++  twilio_document_sids: string[];
++  twilio_submitted_at: string | null;
++  twilio_valid_until: string | null;
+   assigned_phone_number: string | null;
+   minutes_used_this_period: number;
+   monthly_cap_minutes: number;
+diff --git a/lib/twilio/client.ts b/lib/twilio/client.ts
+new file mode 100644
+index 0000000..6e275fe
+--- /dev/null
++++ b/lib/twilio/client.ts
+@@ -0,0 +1,29 @@
++import Twilio from "twilio";
++
++/**
++ * Lazy Twilio client. Constructed on demand rather than at module load so
++ * that importing anything from `lib/twilio` during a build — where the
++ * credentials are deliberately absent — does not throw.
++ */
++let cached: ReturnType<typeof Twilio> | null = null;
++
++export function twilio() {
++  if (cached) return cached;
++
++  const sid = process.env.TWILIO_ACCOUNT_SID;
++  const token = process.env.TWILIO_AUTH_TOKEN;
++  if (!sid || !token) {
++    throw new Error("Twilio is not configured (TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN).");
++  }
++
++  cached = Twilio(sid, token);
++  return cached;
++}
++
++/** Shorthand for the Regulatory Compliance namespace, which is deeply nested. */
++export function rc() {
++  return twilio().numbers.v2.regulatoryCompliance;
++}
++
++export const twilioConfigured = () =>
++  Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN);
+diff --git a/lib/twilio/compliance.ts b/lib/twilio/compliance.ts
+new file mode 100644
+index 0000000..7ff7d62
+--- /dev/null
++++ b/lib/twilio/compliance.ts
+@@ -0,0 +1,283 @@
++/**
++ * Twilio UK regulatory compliance — the piece that was missing.
++ *
++ * Until now onboarding stored the contractor's ID and proof of address in
++ * Supabase and set the status to "submitted". Nothing was ever sent anywhere.
++ * This actually builds and submits the bundle.
++ *
++ * Two regulations, two different shapes:
++ *
++ *   GB local/national — LIMITED COMPANY
++ *     end user  : business_info (name, CRN, authorised representative)
++ *     documents : business_address — attributes only, NO file upload
++ *
++ *   GB local/national — SOLE TRADER (individual)
++ *     end user  : individual_info (name, email, mobile)
++ *     documents : individual_address (attributes)
++ *                 proof_of_identity  — passport or driving licence  [FILE]
++ *                 proof_of_address   — utility bill, council tax…   [FILE]
++ *
++ * Twilio reviews asynchronously, so this submits and persists the SIDs. A
++ * status webhook finishes the job by buying the number.
++ */
++
++import { createAdminClient } from "@/lib/supabase/admin";
++import { rc, twilio } from "./client";
++import type { TwilioBundleStatus } from "@/lib/supabase/types";
++import { parseEvaluation, type ParsedEvaluation } from "./evaluation";
++
++const UPLOAD_URL = "https://numbers-upload.twilio.com/v2/RegulatoryCompliance/SupportingDocuments";
++const DOCUMENTS_BUCKET = "client-documents";
++
++export type ClientRow = {
++  id: string;
++  business_name: string;
++  business_type: "sole_trader" | "limited_company";
++  company_number: string | null;
++  owner_name: string;
++  email: string;
++  phone_number: string | null;
++  address_line1: string | null;
++  address_line2: string | null;
++  city: string | null;
++  postcode: string | null;
++  id_document_type: string | null;
++  id_document_path: string | null;
++  proof_of_address_path: string | null;
++};
++
++export type SubmitResult = {
++  bundleSid: string;
++  status: string;
++  evaluation: ParsedEvaluation;
++  submitted: boolean;
++};
++
++/** "Dave Wilkins" → { first: "Dave", last: "Wilkins" }. Twilio wants them apart. */
++function splitName(full: string): { first: string; last: string } {
++  const parts = full.trim().split(/\s+/).filter(Boolean);
++  if (parts.length === 0) return { first: "Unknown", last: "Unknown" };
++  if (parts.length === 1) return { first: parts[0], last: parts[0] };
++  return { first: parts[0], last: parts.slice(1).join(" ") };
++}
++
++/**
++ * Twilio rejects UK numbers whose address is a PO Box, and the address must
++ * match the proof of address exactly — the single most common rejection.
++ */
++function assertUsableAddress(client: ClientRow) {
++  const line1 = client.address_line1?.trim() ?? "";
++  if (!line1) throw new Error("A street address is required before submitting to Twilio.");
++  if (/\bp\.?o\.?\s*box\b/i.test(line1)) {
++    throw new Error("Twilio does not accept a PO Box for a UK number. A physical address is required.");
++  }
++  if (!client.postcode?.trim()) throw new Error("A UK postcode is required.");
++  if (!client.city?.trim()) throw new Error("A town or city is required.");
++}
++
++async function createAddress(client: ClientRow) {
++  // The customer name on the Address must match the proof of address: the
++  // individual for a sole trader, the registered company for a limited company.
++  const customerName =
++    client.business_type === "sole_trader" ? client.owner_name : client.business_name;
++
++  return twilio().addresses.create({
++    customerName,
++    street: [client.address_line1, client.address_line2].filter(Boolean).join(", "),
++    city: client.city!,
++    region: client.city!, // Twilio requires a region; UK addresses rarely carry one.
++    postalCode: client.postcode!,
++    isoCountry: "GB",
++    friendlyName: `sitering-${client.id}`,
++    emergencyEnabled: true, // required for UK local numbers
++  });
++}
++
++/**
++ * Upload one stored file to Twilio as a supporting document.
++ * This cannot go through the SDK — file uploads use a separate host.
++ */
++async function uploadDocument(opts: {
++  storagePath: string;
++  friendlyName: string;
++  type: string;
++  attributes: Record<string, unknown>;
++}): Promise<string> {
++  const supabase = createAdminClient();
++  const { data, error } = await supabase.storage.from(DOCUMENTS_BUCKET).download(opts.storagePath);
++  if (error || !data) {
++    throw new Error(`Could not read ${opts.storagePath} from storage: ${error?.message ?? "not found"}`);
++  }
++
++  const filename = opts.storagePath.split("/").pop() || "document";
++  const form = new FormData();
++  form.set("FriendlyName", opts.friendlyName);
++  form.set("Type", opts.type);
++  form.set("Attributes", JSON.stringify(opts.attributes));
++  form.set("File", data, filename);
++
++  const auth = Buffer.from(
++    `${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`,
++  ).toString("base64");
++
++  const response = await fetch(UPLOAD_URL, {
++    method: "POST",
++    headers: { Authorization: `Basic ${auth}` },
++    body: form,
++  });
++
++  const body = (await response.json()) as { sid?: string; message?: string };
++  if (!response.ok || !body.sid) {
++    throw new Error(`Twilio rejected the ${opts.type} upload: ${body.message ?? response.status}`);
++  }
++  return body.sid;
++}
++
++// ───────────────────────────────────────────────────── limited company
++async function buildCompanyItems(client: ClientRow, addressSid: string) {
++  const { first, last } = splitName(client.owner_name);
++
++  if (!client.company_number?.trim()) {
++    throw new Error("A Companies House number is required for a limited company bundle.");
++  }
++
++  const endUser = await rc().endUsers.create({
++    friendlyName: client.business_name,
++    type: "business",
++    attributes: {
++      business_name: client.business_name,
++      business_registration_number: client.company_number.trim(),
++      business_registration_identifier: "UK:CRN",
++      first_name: first,
++      last_name: last,
++      email: client.email,
++      phone_number: client.phone_number ?? "",
++      business_contact_first_name: first,
++      business_contact_last_name: last,
++      business_contact_email: client.email,
++      business_contact_phone: client.phone_number ?? "",
++      // We resell numbers to end customers, so this is true for SiteRing.
++      isv_reseller_or_partner: "true",
++    },
++  });
++
++  // GB business needs no uploaded proof — the address document is attributes only.
++  const addressDoc = await rc().supportingDocuments.create({
++    friendlyName: `${client.business_name} address`,
++    type: "business_address",
++    attributes: { address_sids: [addressSid], business_name: client.business_name },
++  });
++
++  return { endUserSid: endUser.sid, documentSids: [addressDoc.sid] };
++}
++
++// ────────────────────────────────────────────────────────── sole trader
++async function buildSoleTraderItems(client: ClientRow, addressSid: string) {
++  const { first, last } = splitName(client.owner_name);
++
++  if (!client.id_document_path || !client.proof_of_address_path) {
++    throw new Error(
++      "A sole trader bundle needs both a photo ID and a proof of address. One or both are missing.",
++    );
++  }
++
++  const endUser = await rc().endUsers.create({
++    friendlyName: client.owner_name,
++    type: "individual",
++    attributes: {
++      first_name: first,
++      last_name: last,
++      email: client.email,
++      phone_number: client.phone_number ?? "",
++      comments: `Sole trader trading as ${client.business_name}. AI receptionist for inbound customer calls.`,
++    },
++  });
++
++  const addressDoc = await rc().supportingDocuments.create({
++    friendlyName: `${client.owner_name} address`,
++    type: "individual_address",
++    attributes: { address_sids: [addressSid] },
++  });
++
++  // A driving licence is a government_issued_document, not a passport —
++  // sending the wrong type is an instant 22214 rejection.
++  const idType =
++    client.id_document_type?.toLowerCase().includes("passport")
++      ? "passport"
++      : "government_issued_document";
++
++  const idSid = await uploadDocument({
++    storagePath: client.id_document_path,
++    friendlyName: `${client.owner_name} photo ID`,
++    type: idType,
++    attributes: { first_name: first, last_name: last },
++  });
++
++  const addressProofSid = await uploadDocument({
++    storagePath: client.proof_of_address_path,
++    friendlyName: `${client.owner_name} proof of address`,
++    type: "utility_bill",
++    attributes: { address_sids: [addressSid] },
++  });
++
++  return { endUserSid: endUser.sid, documentSids: [addressDoc.sid, idSid, addressProofSid] };
++}
++
++/**
++ * Build, evaluate and submit the bundle for one contractor.
++ * Safe to call once per client; call again only after fixing a rejection.
++ */
++export async function submitUkBundle(client: ClientRow): Promise<SubmitResult> {
++  assertUsableAddress(client);
++
++  const supabase = createAdminClient();
++  const isSoleTrader = client.business_type === "sole_trader";
++
++  const address = await createAddress(client);
++
++  const { endUserSid, documentSids } = isSoleTrader
++    ? await buildSoleTraderItems(client, address.sid)
++    : await buildCompanyItems(client, address.sid);
++
++  const bundle = await rc().bundles.create({
++    friendlyName: `${client.business_name} (${isSoleTrader ? "sole trader" : "limited company"})`,
++    email: client.email,
++    isoCountry: "GB",
++    numberType: "local",
++    endUserType: isSoleTrader ? "individual" : "business",
++  });
++
++  for (const objectSid of [endUserSid, ...documentSids]) {
++    await rc().bundles(bundle.sid).itemAssignments.create({ objectSid });
++  }
++
++  // Evaluate before submitting. Submitting a bundle that cannot pass just
++  // burns a review cycle and days of the contractor's time.
++  const rawEvaluation = await rc().bundles(bundle.sid).evaluations.create();
++  const evaluation = parseEvaluation(rawEvaluation);
++
++  let status = bundle.status as string;
++  let submitted = false;
++
++  if (evaluation.compliant) {
++    const updated = await rc().bundles(bundle.sid).update({ status: "pending-review" });
++    status = updated.status as string;
++    submitted = true;
++  }
++
++  await supabase
++    .from("clients")
++    .update({
++      twilio_bundle_sid: bundle.sid,
++      twilio_end_user_sid: endUserSid,
++      twilio_address_sid: address.sid,
++      twilio_document_sids: documentSids,
++      twilio_bundle_status: (submitted ? status : "draft") as TwilioBundleStatus,
++      twilio_rejection_reason: evaluation.compliant ? null : evaluation.summary,
++      twilio_submitted_at: submitted ? new Date().toISOString() : null,
++      onboarding_status: submitted ? "provisioning" : "documents_received",
++    })
++    .eq("id", client.id);
++
++  return { bundleSid: bundle.sid, status, evaluation, submitted };
++}
+diff --git a/lib/twilio/evaluation.ts b/lib/twilio/evaluation.ts
+new file mode 100644
+index 0000000..e4e7c13
+--- /dev/null
++++ b/lib/twilio/evaluation.ts
+@@ -0,0 +1,133 @@
++/**
++ * Turns a Twilio Regulatory Compliance *Evaluation* into something a UK
++ * contractor can act on.
++ *
++ * The shape is easy to get wrong. An evaluation looks like:
++ *
++ *   { status: "noncompliant", results: [ {
++ *       friendly_name, requirement_friendly_name, requirement_name,
++ *       passed, failure_reason, error_code,
++ *       valid: [],
++ *       invalid: [ { friendly_name, object_field, failure_reason, error_code } ]
++ *   } ] }
++ *
++ * Two traps:
++ *   1. A requirement can fail with an EMPTY `invalid` array — the reason then
++ *      only exists at the requirement level. Reading `invalid` alone loses it.
++ *   2. The Node helper camelCases top-level keys only, so nested objects stay
++ *      snake_case. Both spellings are read below.
++ */
++
++export type EvaluationFailure = {
++  /** What Twilio calls the failing requirement, e.g. "Proof of Address". */
++  requirement: string;
++  /** The specific field, when Twilio narrows it down. */
++  field?: string;
++  /** Twilio's own wording. */
++  reason: string;
++  code?: number;
++};
++
++export type ParsedEvaluation = {
++  compliant: boolean;
++  status: string;
++  failures: EvaluationFailure[];
++  /** One plain-English paragraph safe to show a contractor or email them. */
++  summary: string;
++};
++
++type Loose = Record<string, unknown>;
++
++function pick(obj: Loose | undefined, ...keys: string[]): string | undefined {
++  if (!obj) return undefined;
++  for (const key of keys) {
++    const value = obj[key];
++    if (typeof value === "string" && value.trim()) return value.trim();
++  }
++  return undefined;
++}
++
++function pickNumber(obj: Loose | undefined, ...keys: string[]): number | undefined {
++  if (!obj) return undefined;
++  for (const key of keys) {
++    const value = obj[key];
++    if (typeof value === "number") return value;
++  }
++  return undefined;
++}
++
++/** Twilio error codes seen on GB bundles, mapped to something actionable. */
++const CODE_ADVICE: Record<number, string> = {
++  22214: "The document is unreadable or the wrong type.",
++  22215: "A required field is missing.",
++  22216: "The document has expired.",
++  22217: "The details do not match the address on file.",
++  22219: "The document could not be verified.",
++};
++
++export function parseEvaluation(evaluation: unknown): ParsedEvaluation {
++  const root = (evaluation ?? {}) as Loose;
++  const status = pick(root, "status") ?? "unknown";
++  const compliant = status === "compliant";
++
++  const rawResults = (root.results ?? []) as Loose[];
++  const failures: EvaluationFailure[] = [];
++
++  for (const result of Array.isArray(rawResults) ? rawResults : []) {
++    if (result?.passed === true) continue;
++
++    const requirement =
++      pick(result, "requirement_friendly_name", "requirementFriendlyName") ??
++      pick(result, "friendly_name", "friendlyName") ??
++      pick(result, "requirement_name", "requirementName") ??
++      "Unnamed requirement";
++
++    const invalid = (result?.invalid ?? []) as Loose[];
++
++    if (Array.isArray(invalid) && invalid.length > 0) {
++      for (const item of invalid) {
++        const code = pickNumber(item, "error_code", "errorCode");
++        failures.push({
++          requirement,
++          field: pick(item, "friendly_name", "friendlyName", "object_field", "objectField"),
++          reason:
++            pick(item, "failure_reason", "failureReason") ??
++            (code !== undefined ? CODE_ADVICE[code] : undefined) ??
++            "No reason given.",
++          code,
++        });
++      }
++      continue;
++    }
++
++    // Requirement failed with no per-field detail — keep the top-level reason.
++    const code = pickNumber(result, "error_code", "errorCode");
++    failures.push({
++      requirement,
++      reason:
++        pick(result, "failure_reason", "failureReason") ??
++        (code !== undefined ? CODE_ADVICE[code] : undefined) ??
++        "No reason given.",
++      code,
++    });
++  }
++
++  return { compliant, status, failures, summary: summarise(compliant, failures) };
++}
++
++function summarise(compliant: boolean, failures: EvaluationFailure[]): string {
++  if (compliant) return "All regulatory requirements are met.";
++  if (failures.length === 0) {
++    return "Twilio marked the bundle as non-compliant but did not say which requirement failed. Contact support so we can re-submit.";
++  }
++
++  const lines = failures.map((f) => {
++    const where = f.field ? `${f.requirement} (${f.field})` : f.requirement;
++    return `${where}: ${f.reason}`;
++  });
++
++  const unique = Array.from(new Set(lines));
++  return unique.length === 1
++    ? unique[0]
++    : `${unique.length} requirements need attention. ${unique.join(" ")}`;
++}
+diff --git a/lib/twilio/provisioning.ts b/lib/twilio/provisioning.ts
+new file mode 100644
+index 0000000..1365470
+--- /dev/null
++++ b/lib/twilio/provisioning.ts
+@@ -0,0 +1,90 @@
++/**
++ * Buying the UK number, once Twilio has approved the contractor's bundle.
++ *
++ * A GB local number cannot be purchased without an approved bundle SID and an
++ * address SID, so this only ever runs after the compliance step has passed.
++ *
++ * Routing matters as much as the purchase: calls reach the receptionist via
++ * Twilio SIP trunk → LiveKit. A number that is bought but not attached to the
++ * trunk rings into silence, which looks exactly like a broken product to the
++ * contractor's customer. So the trunk is checked BEFORE any money is spent.
++ */
++
++import { createAdminClient } from "@/lib/supabase/admin";
++import { twilio } from "./client";
++
++export type ProvisionResult = {
++  phoneNumber: string;
++  phoneNumberSid: string;
++};
++
++export type ProvisionInput = {
++  id: string;
++  business_name: string;
++  twilio_bundle_sid: string | null;
++  twilio_address_sid: string | null;
++  /** Optional UK area code preference, e.g. "20" for London, "161" Manchester. */
++  area_code?: string | null;
++};
++
++function trunkSid(): string {
++  const sid = process.env.TWILIO_SIP_TRUNK_SID;
++  if (!sid) {
++    throw new Error(
++      "TWILIO_SIP_TRUNK_SID is not set. Numbers must join the SIP trunk that " +
++        "routes to LiveKit, otherwise inbound calls go nowhere. Refusing to buy a number.",
++    );
++  }
++  return sid;
++}
++
++export async function provisionNumber(client: ProvisionInput): Promise<ProvisionResult> {
++  if (!client.twilio_bundle_sid || !client.twilio_address_sid) {
++    throw new Error("Cannot buy a UK number before the regulatory bundle is approved.");
++  }
++
++  const trunk = trunkSid(); // throws before spending anything
++  const api = twilio();
++
++  const available = await api
++    .availablePhoneNumbers("GB")
++    .local.list({
++      voiceEnabled: true,
++      smsEnabled: true,
++      limit: 5,
++      ...(client.area_code ? { areaCode: Number(client.area_code) } : {}),
++    });
++
++  if (available.length === 0) {
++    throw new Error(
++      client.area_code
++        ? `No UK numbers available in area code ${client.area_code}. Try without a preference.`
++        : "Twilio has no UK local numbers available right now.",
++    );
++  }
++
++  const purchased = await api.incomingPhoneNumbers.create({
++    phoneNumber: available[0].phoneNumber,
++    friendlyName: `${client.business_name} (SiteRing)`,
++    bundleSid: client.twilio_bundle_sid,
++    addressSid: client.twilio_address_sid,
++  });
++
++  // Route it into LiveKit. If this fails the number exists but is deaf, so the
++  // error is deliberately loud rather than swallowed.
++  await api.trunking.v1.trunks(trunk).phoneNumbers.create({
++    phoneNumberSid: purchased.sid,
++  });
++
++  const supabase = createAdminClient();
++  await supabase
++    .from("clients")
++    .update({
++      assigned_phone_number: purchased.phoneNumber,
++      twilio_phone_number_sid: purchased.sid,
++      onboarding_status: "live",
++    })
++    .eq("id", client.id);
++
++  return { phoneNumber: purchased.phoneNumber, phoneNumberSid: purchased.sid };
++}
+diff --git a/lib/twilio/sync.ts b/lib/twilio/sync.ts
+new file mode 100644
+index 0000000..93007f3
+--- /dev/null
++++ b/lib/twilio/sync.ts
+@@ -0,0 +1,148 @@
++/**
++ * The background job that moves contractors from "documents uploaded" to
++ * "phone is ringing" without anyone watching a console.
++ *
++ * Twilio reviews bundles asynchronously and gives no reliable push for every
++ * transition, so this polls. One pass does three jobs:
++ *
++ *   1. approved  → buy the number, attach it to the trunk, email them
++ *   2. rejected  → store Twilio's reason in plain English for the dashboard
++ *   3. expiring  → warn before `valid_until` lapses and kills a live number
++ *
++ * Designed to be safe to run every hour. Each client is handled independently;
++ * one contractor's failure never stops the rest.
++ */
++
++import type { ClientUpdate, TwilioBundleStatus } from "@/lib/supabase/types";
++import { createAdminClient } from "@/lib/supabase/admin";
++import { sendNumberLiveEmail } from "@/lib/email";
++import { rc } from "./client";
++import { parseEvaluation } from "./evaluation";
++import { provisionNumber } from "./provisioning";
++
++/** Warn this many days before an approved bundle expires. */
++const RENEWAL_WARNING_DAYS = 30;
++
++const IN_FLIGHT: TwilioBundleStatus[] = ["pending-review", "in-review", "draft"];
++
++export type SyncReport = {
++  checked: number;
++  provisioned: string[];
++  rejected: string[];
++  expiringSoon: string[];
++  errors: { clientId: string; message: string }[];
++};
++
++export async function syncBundles(): Promise<SyncReport> {
++  const supabase = createAdminClient();
++  const report: SyncReport = {
++    checked: 0,
++    provisioned: [],
++    rejected: [],
++    expiringSoon: [],
++    errors: [],
++  };
++
++  const { data, error } = await supabase
++    .from("clients")
++    .select(
++      "id,business_name,owner_name,email,twilio_bundle_sid,twilio_address_sid," +
++        "twilio_bundle_status,assigned_phone_number,twilio_valid_until",
++    )
++    .not("twilio_bundle_sid", "is", null)
++    .in("twilio_bundle_status", [...IN_FLIGHT, "twilio-approved", "provisionally-approved"]);
++
++  if (error) throw new Error(`Could not read clients: ${error.message}`);
++
++  type Pending = {
++    id: string;
++    business_name: string;
++    owner_name: string;
++    email: string;
++    twilio_bundle_sid: string | null;
++    twilio_address_sid: string | null;
++    twilio_bundle_status: TwilioBundleStatus;
++    assigned_phone_number: string | null;
++    twilio_valid_until: string | null;
++  };
++  const clients = (data ?? []) as unknown as Pending[];
++
++  for (const client of clients) {
++    report.checked += 1;
++
++    try {
++      const bundle = await rc().bundles(client.twilio_bundle_sid!).fetch();
++      const status = bundle.status as string;
++      const validUntil = bundle.validUntil ? new Date(bundle.validUntil).toISOString() : null;
++
++      const patch: ClientUpdate = {
++        twilio_bundle_status: status as TwilioBundleStatus,
++        twilio_valid_until: validUntil,
++      };
++
++      // ── rejected ────────────────────────────────────────────────
++      if (status === "twilio-rejected") {
++        // The bundle object does not carry the reason; the evaluation does.
++        let reason = "Twilio rejected the documents but gave no reason.";
++        try {
++          const evaluations = await rc()
++            .bundles(client.twilio_bundle_sid!)
++            .evaluations.list({ limit: 1 });
++          if (evaluations[0]) reason = parseEvaluation(evaluations[0]).summary;
++        } catch {
++          // Keep the generic reason rather than failing the whole pass.
++        }
++        patch.twilio_rejection_reason = reason;
++        patch.onboarding_status = "documents_received";
++        report.rejected.push(client.id);
++      }
++
++      // ── approved, no number yet → buy one ───────────────────────
++      const approved = status === "twilio-approved" || status === "provisionally-approved";
++      if (approved && !client.assigned_phone_number) {
++        patch.twilio_rejection_reason = null;
++
++        const result = await provisionNumber({
++          id: client.id,
++          business_name: client.business_name,
++          twilio_bundle_sid: client.twilio_bundle_sid,
++          twilio_address_sid: client.twilio_address_sid,
++        });
++
++        report.provisioned.push(`${client.business_name} → ${result.phoneNumber}`);
++
++        await sendNumberLiveEmail({
++          to: client.email,
++          ownerName: client.owner_name,
++          businessName: client.business_name,
++          phoneNumber: result.phoneNumber,
++          clientId: client.id,
++        });
++
++        // provisionNumber already wrote the number and onboarding_status.
++        delete patch.onboarding_status;
++      }
++
++      // ── approaching expiry ──────────────────────────────────────
++      if (approved && validUntil) {
++        const daysLeft = Math.floor(
++          (new Date(validUntil).getTime() - Date.now()) / 86_400_000,
++        );
++        if (daysLeft <= RENEWAL_WARNING_DAYS) {
++          report.expiringSoon.push(
++            `${client.business_name} expires in ${daysLeft} day${daysLeft === 1 ? "" : "s"}`,
++          );
++        }
++      }
++
++      await supabase.from("clients").update(patch).eq("id", client.id);
++    } catch (cause) {
++      report.errors.push({
++        clientId: client.id,
++        message: cause instanceof Error ? cause.message : "Unknown failure",
++      });
++    }
++  }
++
++  return report;
++}
+diff --git a/package-lock.json b/package-lock.json
+index b752956..7d90e5c 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -28,6 +28,7 @@
+         "stripe": "^16.12.0",
+         "tailwind-merge": "^2.5.2",
+         "tailwindcss-animate": "^1.0.7",
++        "twilio": "^5.3.0",
+         "zod": "^3.23.8"
+       },
+       "devDependencies": {
+@@ -41,6 +42,7 @@
+         "prettier": "^3.3.3",
+         "prettier-plugin-tailwindcss": "^0.6.8",
+         "tailwindcss": "^3.4.13",
++        "tsx": "^4.23.15",
+         "typescript": "^5.6.2"
+       },
+       "engines": {
+@@ -59,15 +61,483 @@
+         "url": "https://github.com/sponsors/sindresorhus"
+       }
+     },
++    "node_modules/@emnapi/core": {
++      "version": "1.11.3",
++      "resolved": "https://registry.npmjs.org/@emnapi/core/-/core-1.11.3.tgz",
++      "integrity": "sha512-zLpS5asjEb7lq8jYLq37N6XKaE41DIexlY1rF/z4/tIl3wo13Sqm28fRyfIsKZD+NZ8mM5RoKkpW/rBcuoSZSg==",
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "peer": true,
++      "dependencies": {
++        "@emnapi/wasi-threads": "1.2.3",
++        "tslib": "^2.4.0"
++      }
++    },
++    "node_modules/@emnapi/runtime": {
++      "version": "1.11.3",
++      "resolved": "https://registry.npmjs.org/@emnapi/runtime/-/runtime-1.11.3.tgz",
++      "integrity": "sha512-Xz4Tpyki7XyrpbUK1jR1AhdAdaXyhhY4lZ3neLodmhpuWfy2PAQN5B46sAiU4liOXGLkHypn/qU+jvfWSCYYLA==",
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "peer": true,
++      "dependencies": {
++        "tslib": "^2.4.0"
++      }
++    },
+     "node_modules/@emnapi/wasi-threads": {
+-      "version": "1.2.1",
+-      "resolved": "https://registry.npmjs.org/@emnapi/wasi-threads/-/wasi-threads-1.2.1.tgz",
+-      "integrity": "sha512-uTII7OYF+/Mes/MrcIOYp5yOtSMLBWSIoLPpcgwipoiKbli6k322tcoFsxoIIxPDqW01SQGAgko4EzZi2BNv2w==",
++      "version": "1.2.3",
++      "resolved": "https://registry.npmjs.org/@emnapi/wasi-threads/-/wasi-threads-1.2.3.tgz",
++      "integrity": "sha512-ELEBe8PsLvvJ6QMr0zLt8ffvOHW/dc1m3CEzNMg7aJUv3bMaoDtw2TXyDAwkYBuroxxuHEwhRTLJSe5sya547g==",
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "peer": true,
++      "dependencies": {
++        "tslib": "^2.4.0"
++      }
++    },
++    "node_modules/@esbuild/aix-ppc64": {
++      "version": "0.28.2",
++      "resolved": "https://registry.npmjs.org/@esbuild/aix-ppc64/-/aix-ppc64-0.28.2.tgz",
++      "integrity": "sha512-XExcO+dvLKvVtNTibSTBej1NCAbaGhWn9Ww1ZPx80qsahhPFe/8jgWP0IchNe0F3HwkU7n8ejhH8bjonqht8mQ==",
++      "cpu": [
++        "ppc64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "aix"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/android-arm": {
++      "version": "0.28.2",
++      "resolved": "https://registry.npmjs.org/@esbuild/android-arm/-/android-arm-0.28.2.tgz",
++      "integrity": "sha512-kXXoiPVVGQcnIYGOeaovwOURpniDBpSq4A03qkQ+BMQqtGG6HYap3xne9C1O1yo4TR3qxlCX5IqqmX6fFo2Lqg==",
++      "cpu": [
++        "arm"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "android"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/android-arm64": {
++      "version": "0.28.2",
++      "resolved": "https://registry.npmjs.org/@esbuild/android-arm64/-/android-arm64-0.28.2.tgz",
++      "integrity": "sha512-5YfKeeI8qWfBZIX+u2xZC3Zlb3Os/gLS2sbEKM+I4ZOcsWmHS2WLysCcQZDAFRslDUU5Oiq44gf6PYN1vGwG5A==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "android"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/android-x64": {
++      "version": "0.28.2",
++      "resolved": "https://registry.npmjs.org/@esbuild/android-x64/-/android-x64-0.28.2.tgz",
++      "integrity": "sha512-O387ite7SzUyCcy3JQX4P4bLtEA7bLLkx+esve5JHnyYfNTxcVpXZo9jhdB0lTKN44gztELTdU7nS8Nr16Fs1Q==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "android"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/darwin-arm64": {
++      "version": "0.28.2",
++      "resolved": "https://registry.npmjs.org/@esbuild/darwin-arm64/-/darwin-arm64-0.28.2.tgz",
++      "integrity": "sha512-n4KqkOQrraxHJcgjM1RvwbigfQKIKJVpM7xp+KsxiyUSrRdIXnt73VhrPAx0fV44hgfmIVKjxMN9J1t5jySVkw==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "darwin"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/darwin-x64": {
++      "version": "0.28.2",
++      "resolved": "https://registry.npmjs.org/@esbuild/darwin-x64/-/darwin-x64-0.28.2.tgz",
++      "integrity": "sha512-uq6suIWYP37qzGddBKPw5QEQPi6HiLGsO7UmkpfyaYNQ3D+rN6w6WfwH+nuqcGXWvawGwxOEroO4YGnFh95azw==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "darwin"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/freebsd-arm64": {
++      "version": "0.28.2",
++      "resolved": "https://registry.npmjs.org/@esbuild/freebsd-arm64/-/freebsd-arm64-0.28.2.tgz",
++      "integrity": "sha512-n+I0BTSRIoy+d6RPKnEVwql5UwBJolytvY4mAOIEJorKlqgPII8ix6slVVrfZ5Tnj7glIZvloylbB/EJPMWEXw==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "freebsd"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/freebsd-x64": {
++      "version": "0.28.2",
++      "resolved": "https://registry.npmjs.org/@esbuild/freebsd-x64/-/freebsd-x64-0.28.2.tgz",
++      "integrity": "sha512-78XJTJkvPs0kz2w61301PJjXl4g7q3JqiYMZ/M/yVI73EHBrCRTgkhu9oqG7vPqq+a/yadEW8aD+agKlk5xrmg==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "freebsd"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/linux-arm": {
++      "version": "0.28.2",
++      "resolved": "https://registry.npmjs.org/@esbuild/linux-arm/-/linux-arm-0.28.2.tgz",
++      "integrity": "sha512-XlDnu2q5yoqems+xay6wSAcg9DDD7K9RLKZEBOMZm3ckNpJBvOX20tSfby8KfrrhINDyv9V2YVZKY/SpoGJI8w==",
++      "cpu": [
++        "arm"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/linux-arm64": {
++      "version": "0.28.2",
++      "resolved": "https://registry.npmjs.org/@esbuild/linux-arm64/-/linux-arm64-0.28.2.tgz",
++      "integrity": "sha512-pW4AC0P3it8c7do9MVM4p51FzHzdM/TZrerurgRcHJ2WTa1VQ1CIq18xncfpBJw4ojkiZZrKW2yIBWBP92j6Ug==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/linux-ia32": {
++      "version": "0.28.2",
++      "resolved": "https://registry.npmjs.org/@esbuild/linux-ia32/-/linux-ia32-0.28.2.tgz",
++      "integrity": "sha512-CYbnj78HsIeA+DhgUKgFCfvNsTHFhMMrinUrMZpDXJXKN8T3XViTZ/+wtHeVxEWY8ewSzTFN+nRmSwO2tZaLUQ==",
++      "cpu": [
++        "ia32"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/linux-loong64": {
++      "version": "0.28.2",
++      "resolved": "https://registry.npmjs.org/@esbuild/linux-loong64/-/linux-loong64-0.28.2.tgz",
++      "integrity": "sha512-buwkd8nsph4R+ajRvw0qM5Hja/TXQow3ptzWO2EbG/cqcIkHloRrdlBtQlshyYGTNFvfkfJ5tpPLVkY4DtsPfQ==",
++      "cpu": [
++        "loong64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/linux-mips64el": {
++      "version": "0.28.2",
++      "resolved": "https://registry.npmjs.org/@esbuild/linux-mips64el/-/linux-mips64el-0.28.2.tgz",
++      "integrity": "sha512-ZVykbDyk7519VwiNb9Lcj9m8XM6v5V9uKPvrEMkkEedVewf+0itkhahp4HDpgERXhwLRpWFypsGbG/J8s0QjJA==",
++      "cpu": [
++        "mips64el"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/linux-ppc64": {
++      "version": "0.28.2",
++      "resolved": "https://registry.npmjs.org/@esbuild/linux-ppc64/-/linux-ppc64-0.28.2.tgz",
++      "integrity": "sha512-CAXl+Dtd9UUuJd8pKKdwh6MLm3MUMiqMPmhZ3tTSXPqfyQ3vDl6R5hZdZ/kYojK4ofXtdfSv1tFq8XzWx3heNQ==",
++      "cpu": [
++        "ppc64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/linux-riscv64": {
++      "version": "0.28.2",
++      "resolved": "https://registry.npmjs.org/@esbuild/linux-riscv64/-/linux-riscv64-0.28.2.tgz",
++      "integrity": "sha512-GeXCej4IQtU1B+QlDV8W/RRvbzI3O/Stss+/bCXv4lZls5WGRtu2a+3JkA3i4qIUlMXpcHebWpF8AkJhATowuA==",
++      "cpu": [
++        "riscv64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/linux-s390x": {
++      "version": "0.28.2",
++      "resolved": "https://registry.npmjs.org/@esbuild/linux-s390x/-/linux-s390x-0.28.2.tgz",
++      "integrity": "sha512-3H1weTYZPxt/WOhByszQZybS9w5lKzUn1FDMsgEChbHWQwHYQQRfBxgCcZvPhjHfKyJjIievvMmEUawJrdY9Dg==",
++      "cpu": [
++        "s390x"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/linux-x64": {
++      "version": "0.28.2",
++      "resolved": "https://registry.npmjs.org/@esbuild/linux-x64/-/linux-x64-0.28.2.tgz",
++      "integrity": "sha512-4xTZr1FUmSoQW4XIWmit3tzQrUTZM+N3P0XV8xROKYF50XfI7xeO90+1bZvNwxIufQ9hDQVRJH5YhgPVF8A/HQ==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/netbsd-arm64": {
++      "version": "0.28.2",
++      "resolved": "https://registry.npmjs.org/@esbuild/netbsd-arm64/-/netbsd-arm64-0.28.2.tgz",
++      "integrity": "sha512-sSATRjPeDBg3pdgHoQfoYBob11Kk1FGa9lui5RIHZCoCkJa9QKlvl3/vKz2usCmYYjs7ymJR/2Nnsqe+Hjt5nw==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "netbsd"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/netbsd-x64": {
++      "version": "0.28.2",
++      "resolved": "https://registry.npmjs.org/@esbuild/netbsd-x64/-/netbsd-x64-0.28.2.tgz",
++      "integrity": "sha512-lqnzCV+mM0gIADaKihiCg6ifgfU2L3h5E33rNQBN1Y4MaVGnzryzmvvf7UHxprpQdE8hpqLolJ9Rl+SkIRDpyw==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "netbsd"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/openbsd-arm64": {
++      "version": "0.28.2",
++      "resolved": "https://registry.npmjs.org/@esbuild/openbsd-arm64/-/openbsd-arm64-0.28.2.tgz",
++      "integrity": "sha512-AL2qJILH7lNjrDmCQDvdxMfAUIv8KMNZOvrwAQ8i8//ntL9FflhOyMJ8OZSMBb8/AWXe3/5v5S20y3zCoZWKoQ==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "openbsd"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/openbsd-x64": {
++      "version": "0.28.2",
++      "resolved": "https://registry.npmjs.org/@esbuild/openbsd-x64/-/openbsd-x64-0.28.2.tgz",
++      "integrity": "sha512-QtiuPytchRyC4rwUKhexJdQKvDuZ6hWloi3igqPQNUJCS1/v9EiO3UTOXR6A3FoMo4fnAKbWJdqaIwhOzh8qEw==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "openbsd"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/openharmony-arm64": {
++      "version": "0.28.2",
++      "resolved": "https://registry.npmjs.org/@esbuild/openharmony-arm64/-/openharmony-arm64-0.28.2.tgz",
++      "integrity": "sha512-WkhYDmpTjLvGlScA1rwjRUmhl4k8oXR3cIbtqWmELgU/dFeHHlEllxDvdWcNJV9rbzCexB5vz8gtNewWLgCT7Q==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "openharmony"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/sunos-x64": {
++      "version": "0.28.2",
++      "resolved": "https://registry.npmjs.org/@esbuild/sunos-x64/-/sunos-x64-0.28.2.tgz",
++      "integrity": "sha512-GPMSkTOtMnv2U2F8gxe4Io6qmVs+YKyp832Etqqxr0hFngmXQ3rzwytelm3GIn7T4VviRUlf3sOgBOiTdvaf7g==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "sunos"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/win32-arm64": {
++      "version": "0.28.2",
++      "resolved": "https://registry.npmjs.org/@esbuild/win32-arm64/-/win32-arm64-0.28.2.tgz",
++      "integrity": "sha512-PIhhEkE9uPBleRBrQEJpUn7MBnibZzbGzYWPmY3x+YoVg/95zbjB4CxPPOQ8l5tYYM4mMaCthF8/1DIfBQQyWQ==",
++      "cpu": [
++        "arm64"
++      ],
+       "dev": true,
+       "license": "MIT",
+       "optional": true,
+-      "dependencies": {
+-        "tslib": "^2.4.0"
++      "os": [
++        "win32"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/win32-ia32": {
++      "version": "0.28.2",
++      "resolved": "https://registry.npmjs.org/@esbuild/win32-ia32/-/win32-ia32-0.28.2.tgz",
++      "integrity": "sha512-YmJbfTlvU7Sdn9BB+4PRES4oB6pxgS37MAONj+hBr/cpXS1aBPKXxNnDbu+QCWPj0o9dgyxeq79g6c5P8KeuYA==",
++      "cpu": [
++        "ia32"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "win32"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/win32-x64": {
++      "version": "0.28.2",
++      "resolved": "https://registry.npmjs.org/@esbuild/win32-x64/-/win32-x64-0.28.2.tgz",
++      "integrity": "sha512-5ebpxr3nWMzrL/rnUI755Jkuee0bHL/Gq0WTF9lvcpv73wAp5eu8MfBUgWK9bhWvZjj7yX8etf/8tI8Ney695g==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "win32"
++      ],
++      "engines": {
++        "node": ">=18"
+       }
+     },
+     "node_modules/@eslint-community/eslint-utils": {
+@@ -1299,7 +1769,6 @@
+       "resolved": "https://registry.npmjs.org/@supabase/supabase-js/-/supabase-js-2.116.0.tgz",
+       "integrity": "sha512-YyWmKXt2NspV9iO8FPnlswUFJIRnrLd3oTCb+3ZyYRuKZtBH0xCUDgnUqoyA0fGUxpM/UhfwDjYf/dht/9bp7g==",
+       "license": "MIT",
+-      "peer": true,
+       "dependencies": {
+         "@supabase/auth-js": "2.116.0",
+         "@supabase/functions-js": "2.116.0",
+@@ -1375,7 +1844,6 @@
+       "integrity": "sha512-vfEqpXTvwT91yhmwdfouStN2hSKwTvyRs8qpLfADyrq/kxDw0hZM7Wk9Ug1FELj8hIby+S/+kQCSRFF32nv2Qw==",
+       "devOptional": true,
+       "license": "MIT",
+-      "peer": true,
+       "dependencies": {
+         "@types/prop-types": "*",
+         "csstype": "^3.2.2"
+@@ -1387,7 +1855,6 @@
+       "integrity": "sha512-MEe3UeoENYVFXzoXEWsvcpg6ZvlrFNlOQ7EOsvhI3CfAXwzPfO8Qwuxd40nepsYKqyyVQnTdEfv68q91yLcKrQ==",
+       "devOptional": true,
+       "license": "MIT",
+-      "peer": true,
+       "peerDependencies": {
+         "@types/react": "^18.0.0"
+       }
+@@ -1437,7 +1904,6 @@
+       "integrity": "sha512-nO974WLllwhSFWQXnMLj6nDGa8f0khKEz1JzpPJ1u7Vm/4X1X6ZHajpoknU4bb41vJyMB0HHVyS2GqdhWfIXZw==",
+       "dev": true,
+       "license": "MIT",
+-      "peer": true,
+       "dependencies": {
+         "@typescript-eslint/scope-manager": "8.70.1",
+         "@typescript-eslint/types": "8.70.1",
+@@ -1953,6 +2419,40 @@
+         "node": ">=14.0.0"
+       }
+     },
++    "node_modules/@unrs/resolver-binding-wasm32-wasi/node_modules/@emnapi/core": {
++      "version": "1.10.0",
++      "resolved": "https://registry.npmjs.org/@emnapi/core/-/core-1.10.0.tgz",
++      "integrity": "sha512-yq6OkJ4p82CAfPl0u9mQebQHKPJkY7WrIuk205cTYnYe+k2Z8YBh11FrbRG/H6ihirqcacOgl2BIO8oyMQLeXw==",
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "dependencies": {
++        "@emnapi/wasi-threads": "1.2.1",
++        "tslib": "^2.4.0"
++      }
++    },
++    "node_modules/@unrs/resolver-binding-wasm32-wasi/node_modules/@emnapi/runtime": {
++      "version": "1.10.0",
++      "resolved": "https://registry.npmjs.org/@emnapi/runtime/-/runtime-1.10.0.tgz",
++      "integrity": "sha512-ewvYlk86xUoGI0zQRNq/mC+16R1QeDlKQy21Ki3oSYXNgLb45GV1P6A0M+/s6nyCuNDqe5VpaY84BzXGwVbwFA==",
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "dependencies": {
++        "tslib": "^2.4.0"
++      }
++    },
++    "node_modules/@unrs/resolver-binding-wasm32-wasi/node_modules/@emnapi/wasi-threads": {
++      "version": "1.2.1",
++      "resolved": "https://registry.npmjs.org/@emnapi/wasi-threads/-/wasi-threads-1.2.1.tgz",
++      "integrity": "sha512-uTII7OYF+/Mes/MrcIOYp5yOtSMLBWSIoLPpcgwipoiKbli6k322tcoFsxoIIxPDqW01SQGAgko4EzZi2BNv2w==",
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "dependencies": {
++        "tslib": "^2.4.0"
++      }
++    },
+     "node_modules/@unrs/resolver-binding-win32-arm64-msvc": {
+       "version": "1.12.2",
+       "resolved": "https://registry.npmjs.org/@unrs/resolver-binding-win32-arm64-msvc/-/resolver-binding-win32-arm64-msvc-1.12.2.tgz",
+@@ -2001,7 +2501,6 @@
+       "integrity": "sha512-lGq+9yr1/GuAWaVYIHRjvvySG5/4VfKIvC8EWxStPdcDh/Ka7FG3twP6v4d5BkravUilhIAsG4Qj83t02LWUPQ==",
+       "dev": true,
+       "license": "MIT",
+-      "peer": true,
+       "bin": {
+         "acorn": "bin/acorn"
+       },
+@@ -2019,6 +2518,18 @@
+         "acorn": "^6.0.0 || ^7.0.0 || ^8.0.0"
+       }
+     },
++    "node_modules/agent-base": {
++      "version": "6.0.2",
++      "resolved": "https://registry.npmjs.org/agent-base/-/agent-base-6.0.2.tgz",
++      "integrity": "sha512-RZNwNclF7+MS/8bDg70amg32dyeZGZxiDuQmZxKLAlQjr3jGyLx+4Kkk58UO7D2QdgFIQCovuSuZESne6RG6XQ==",
++      "license": "MIT",
++      "dependencies": {
++        "debug": "4"
++      },
++      "engines": {
++        "node": ">= 6.0.0"
++      }
++    },
+     "node_modules/ajv": {
+       "version": "6.15.0",
+       "resolved": "https://registry.npmjs.org/ajv/-/ajv-6.15.0.tgz",
+@@ -2293,6 +2804,12 @@
+         "node": ">= 0.4"
+       }
+     },
++    "node_modules/asynckit": {
++      "version": "0.4.0",
++      "resolved": "https://registry.npmjs.org/asynckit/-/asynckit-0.4.0.tgz",
++      "integrity": "sha512-Oei9OH4tRh0YqU3GxhX79dM/mwVgvbZJaSNaRk+bshkj0S5cfHcgYakreBjrHwatXKbz+IoIdYLxrKim2MjW0Q==",
++      "license": "MIT"
++    },
+     "node_modules/autoprefixer": {
+       "version": "10.6.1",
+       "resolved": "https://registry.npmjs.org/autoprefixer/-/autoprefixer-10.6.1.tgz",
+@@ -2356,6 +2873,18 @@
+         "node": ">=4"
+       }
+     },
++    "node_modules/axios": {
++      "version": "1.20.0",
++      "resolved": "https://registry.npmjs.org/axios/-/axios-1.20.0.tgz",
++      "integrity": "sha512-r8aOh8j9cGKpgQAqpzrUHnSIc6a59Y3Xf/cv8sy1DrHCkZHzQGEuoq1tARk6qSyDdtQGSDgpb9kFlruzPvrgwg==",
++      "license": "MIT",
++      "dependencies": {
++        "follow-redirects": "^1.16.0",
++        "form-data": "^4.0.6",
++        "https-proxy-agent": "^5.0.1",
++        "proxy-from-env": "^2.1.0"
++      }
++    },
+     "node_modules/axobject-query": {
+       "version": "4.1.0",
+       "resolved": "https://registry.npmjs.org/axobject-query/-/axobject-query-4.1.0.tgz",
+@@ -2441,7 +2970,6 @@
+         }
+       ],
+       "license": "MIT",
+-      "peer": true,
+       "dependencies": {
+         "baseline-browser-mapping": "^2.11.23",
+         "caniuse-lite": "^1.0.30001810",
+@@ -2456,6 +2984,12 @@
+         "node": "^6 || ^7 || ^8 || ^9 || ^10 || ^11 || ^12 || >=13.7"
+       }
+     },
++    "node_modules/buffer-equal-constant-time": {
++      "version": "1.0.1",
++      "resolved": "https://registry.npmjs.org/buffer-equal-constant-time/-/buffer-equal-constant-time-1.0.1.tgz",
++      "integrity": "sha512-zRpUiDwd/xk6ADqPMATG8vc9VPrkck7T07OIx0gnjmJAnHnTVXNQG3vfvWNuiZIkwu9KrKdA1iJKfsfTVxE6NA==",
++      "license": "BSD-3-Clause"
++    },
+     "node_modules/busboy": {
+       "version": "1.6.0",
+       "resolved": "https://registry.npmjs.org/busboy/-/busboy-1.6.0.tgz",
+@@ -2654,6 +3188,18 @@
+       "dev": true,
+       "license": "MIT"
+     },
++    "node_modules/combined-stream": {
++      "version": "1.0.8",
++      "resolved": "https://registry.npmjs.org/combined-stream/-/combined-stream-1.0.8.tgz",
++      "integrity": "sha512-FQN4MRfuJeHf7cBbBMJFXhKSDq+2kAArBlmRBvcvFE5BB1HZKXtSFASDhdlz9zOYwxh8lDdnvmMOe/+5cdoEdg==",
++      "license": "MIT",
++      "dependencies": {
++        "delayed-stream": "~1.0.0"
++      },
++      "engines": {
++        "node": ">= 0.8"
++      }
++    },
+     "node_modules/commander": {
+       "version": "4.1.1",
+       "resolved": "https://registry.npmjs.org/commander/-/commander-4.1.1.tgz",
+@@ -2778,11 +3324,16 @@
+         "url": "https://github.com/sponsors/ljharb"
+       }
+     },
++    "node_modules/dayjs": {
++      "version": "1.11.23",
++      "resolved": "https://registry.npmjs.org/dayjs/-/dayjs-1.11.23.tgz",
++      "integrity": "sha512-QDTCU0M0MxR3hQfnlDJfwekQiaanm1ubOD231u73WBckQ/fsamwRLiE2GBz6D3a/xF1NgfiDLJjXBa1hYOYTtQ==",
++      "license": "MIT"
++    },
+     "node_modules/debug": {
+       "version": "4.4.3",
+       "resolved": "https://registry.npmjs.org/debug/-/debug-4.4.3.tgz",
+       "integrity": "sha512-RGwwWnwQvkVfavKVt22FGLw+xYSdzARwm0ru6DhTVA3umU5hZc28V3kO4stgYryrTlLpuvgI9GiijltAjNbcqA==",
+-      "dev": true,
+       "license": "MIT",
+       "dependencies": {
+         "ms": "^2.1.3"
+@@ -2839,6 +3390,15 @@
+         "url": "https://github.com/sponsors/ljharb"
+       }
+     },
++    "node_modules/delayed-stream": {
++      "version": "1.0.0",
++      "resolved": "https://registry.npmjs.org/delayed-stream/-/delayed-stream-1.0.0.tgz",
++      "integrity": "sha512-ZySD7Nf91aLB0RxL4KGrKHBXl7Eds1DAmEdcoVawXnLD7SDhpNgtuII2aAkg7a7QS41jxPSZ17p4VdGnMHk3MQ==",
++      "license": "MIT",
++      "engines": {
++        "node": ">=0.4.0"
++      }
++    },
+     "node_modules/detect-node-es": {
+       "version": "1.1.0",
+       "resolved": "https://registry.npmjs.org/detect-node-es/-/detect-node-es-1.1.0.tgz",
+@@ -2891,6 +3451,15 @@
+       "dev": true,
+       "license": "MIT"
+     },
++    "node_modules/ecdsa-sig-formatter": {
++      "version": "1.0.11",
++      "resolved": "https://registry.npmjs.org/ecdsa-sig-formatter/-/ecdsa-sig-formatter-1.0.11.tgz",
++      "integrity": "sha512-nagl3RYrbNv6kQkeJIpt6NJZy8twLB/2vtz6yN9Z4vRKHN4/QZJIEbqohALSgwKdnksuY3k5Addp5lg8sVoVcQ==",
++      "license": "Apache-2.0",
++      "dependencies": {
++        "safe-buffer": "^5.0.1"
++      }
++    },
+     "node_modules/electron-to-chromium": {
+       "version": "1.5.434",
+       "resolved": "https://registry.npmjs.org/electron-to-chromium/-/electron-to-chromium-1.5.434.tgz",
+@@ -3055,7 +3624,6 @@
+       "version": "2.1.0",
+       "resolved": "https://registry.npmjs.org/es-set-tostringtag/-/es-set-tostringtag-2.1.0.tgz",
+       "integrity": "sha512-j6vWzfrGVfyXxge+O0x5sh6cvxAog0a/4Rdd2K36zCMV5eJ+/+tOAngRO8cODMNWbVRdVlmGZQL2YS3yR8bIUA==",
+-      "dev": true,
+       "license": "MIT",
+       "dependencies": {
+         "es-errors": "^1.3.0",
+@@ -3101,6 +3669,48 @@
+         "url": "https://github.com/sponsors/ljharb"
+       }
+     },
++    "node_modules/esbuild": {
++      "version": "0.28.2",
++      "resolved": "https://registry.npmjs.org/esbuild/-/esbuild-0.28.2.tgz",
++      "integrity": "sha512-HKVLS8dvII+xoKW9kmqxbRKrnWEXfJJr/FZhhJmiqIB0e053QNYFqOBouTMO/k5sID4MvCiUCvv8b9M4h32wIA==",
++      "devOptional": true,
++      "hasInstallScript": true,
++      "license": "MIT",
++      "bin": {
++        "esbuild": "bin/esbuild"
++      },
++      "engines": {
++        "node": ">=18"
++      },
++      "optionalDependencies": {
++        "@esbuild/aix-ppc64": "0.28.2",
++        "@esbuild/android-arm": "0.28.2",
++        "@esbuild/android-arm64": "0.28.2",
++        "@esbuild/android-x64": "0.28.2",
++        "@esbuild/darwin-arm64": "0.28.2",
++        "@esbuild/darwin-x64": "0.28.2",
++        "@esbuild/freebsd-arm64": "0.28.2",
++        "@esbuild/freebsd-x64": "0.28.2",
++        "@esbuild/linux-arm": "0.28.2",
++        "@esbuild/linux-arm64": "0.28.2",
++        "@esbuild/linux-ia32": "0.28.2",
++        "@esbuild/linux-loong64": "0.28.2",
++        "@esbuild/linux-mips64el": "0.28.2",
++        "@esbuild/linux-ppc64": "0.28.2",
++        "@esbuild/linux-riscv64": "0.28.2",
++        "@esbuild/linux-s390x": "0.28.2",
++        "@esbuild/linux-x64": "0.28.2",
++        "@esbuild/netbsd-arm64": "0.28.2",
++        "@esbuild/netbsd-x64": "0.28.2",
++        "@esbuild/openbsd-arm64": "0.28.2",
++        "@esbuild/openbsd-x64": "0.28.2",
++        "@esbuild/openharmony-arm64": "0.28.2",
++        "@esbuild/sunos-x64": "0.28.2",
++        "@esbuild/win32-arm64": "0.28.2",
++        "@esbuild/win32-ia32": "0.28.2",
++        "@esbuild/win32-x64": "0.28.2"
++      }
++    },
+     "node_modules/escalade": {
+       "version": "3.2.0",
+       "resolved": "https://registry.npmjs.org/escalade/-/escalade-3.2.0.tgz",
+@@ -3131,7 +3741,6 @@
+       "deprecated": "This version is no longer supported. Please see https://eslint.org/version-support for other options.",
+       "dev": true,
+       "license": "MIT",
+-      "peer": true,
+       "dependencies": {
+         "@eslint-community/eslint-utils": "^4.2.0",
+         "@eslint-community/regexpp": "^4.6.1",
+@@ -3301,7 +3910,6 @@
+       "integrity": "sha512-whOE1HFo/qJDyX4SnXzP4N6zOWn79WhnCUY/iDR0mPfQZO8wcYE4JClzI2oZrhBnnMUCBCHZhO6VQyoBU95mZA==",
+       "dev": true,
+       "license": "MIT",
+-      "peer": true,
+       "dependencies": {
+         "@rtsao/scc": "^1.1.0",
+         "array-includes": "^3.1.9",
+@@ -3678,6 +4286,26 @@
+       "dev": true,
+       "license": "ISC"
+     },
++    "node_modules/follow-redirects": {
++      "version": "1.16.0",
++      "resolved": "https://registry.npmjs.org/follow-redirects/-/follow-redirects-1.16.0.tgz",
++      "integrity": "sha512-y5rN/uOsadFT/JfYwhxRS5R7Qce+g3zG97+JrtFZlC9klX/W5hD7iiLzScI4nZqUS7DNUdhPgw4xI8W2LuXlUw==",
++      "funding": [
++        {
++          "type": "individual",
++          "url": "https://github.com/sponsors/RubenVerborgh"
++        }
++      ],
++      "license": "MIT",
++      "engines": {
++        "node": ">=4.0"
++      },
++      "peerDependenciesMeta": {
++        "debug": {
++          "optional": true
++        }
++      }
++    },
+     "node_modules/for-each": {
+       "version": "0.3.5",
+       "resolved": "https://registry.npmjs.org/for-each/-/for-each-0.3.5.tgz",
+@@ -3711,6 +4339,22 @@
+         "url": "https://github.com/sponsors/isaacs"
+       }
+     },
++    "node_modules/form-data": {
++      "version": "4.0.6",
++      "resolved": "https://registry.npmjs.org/form-data/-/form-data-4.0.6.tgz",
++      "integrity": "sha512-vKatAh4SlVfgbv+YtmhiRjhEMJsYpsG1Y2rMQtR+SVSbytsSD1YGzDIcrAJmdFec88u/+VoGmxnl+80gL1tRCQ==",
++      "license": "MIT",
++      "dependencies": {
++        "asynckit": "^0.4.0",
++        "combined-stream": "^1.0.8",
++        "es-set-tostringtag": "^2.1.0",
++        "hasown": "^2.0.4",
++        "mime-types": "^2.1.35"
++      },
++      "engines": {
++        "node": ">= 6"
++      }
++    },
+     "node_modules/fraction.js": {
+       "version": "5.3.4",
+       "resolved": "https://registry.npmjs.org/fraction.js/-/fraction.js-5.3.4.tgz",
+@@ -4064,7 +4708,6 @@
+       "version": "1.0.2",
+       "resolved": "https://registry.npmjs.org/has-tostringtag/-/has-tostringtag-1.0.2.tgz",
+       "integrity": "sha512-NqADB8VjPFLM2V0VvHUewwwsw0ZWBaIdgo+ieHtK3hasLz4qeCRjYcqfB6AQrBggRKppKF8L52/VqdVsO47Dlw==",
+-      "dev": true,
+       "license": "MIT",
+       "dependencies": {
+         "has-symbols": "^1.0.3"
+@@ -4088,6 +4731,19 @@
+         "node": ">= 0.4"
+       }
+     },
++    "node_modules/https-proxy-agent": {
++      "version": "5.0.1",
++      "resolved": "https://registry.npmjs.org/https-proxy-agent/-/https-proxy-agent-5.0.1.tgz",
++      "integrity": "sha512-dFcAjpTQFgoLMzC2VwU+C/CbS7uRL0lWmxDITmqm7C+7F0Odmj6s9l6alZc6AELXhrnggM2CeWSXHGOdX2YtwA==",
++      "license": "MIT",
++      "dependencies": {
++        "agent-base": "6",
++        "debug": "4"
++      },
++      "engines": {
++        "node": ">= 6"
++      }
++    },
+     "node_modules/iceberg-js": {
+       "version": "0.8.1",
+       "resolved": "https://registry.npmjs.org/iceberg-js/-/iceberg-js-0.8.1.tgz",
+@@ -4670,7 +5326,6 @@
+       "resolved": "https://registry.npmjs.org/jiti/-/jiti-1.21.7.tgz",
+       "integrity": "sha512-/imKNG4EbWNrVjoNC/1H5/9GFy+tqjGBHCaSsN+P2RnPqjsLmv6UD3Ej+Kj8nBWaRAwyk7kK5ZUc+OEatnTR3A==",
+       "license": "MIT",
+-      "peer": true,
+       "bin": {
+         "jiti": "bin/jiti.js"
+       }
+@@ -4738,6 +5393,28 @@
+         "json5": "lib/cli.js"
+       }
+     },
++    "node_modules/jsonwebtoken": {
++      "version": "9.0.3",
++      "resolved": "https://registry.npmjs.org/jsonwebtoken/-/jsonwebtoken-9.0.3.tgz",
++      "integrity": "sha512-MT/xP0CrubFRNLNKvxJ2BYfy53Zkm++5bX9dtuPbqAeQpTVe0MQTFhao8+Cp//EmJp244xt6Drw/GVEGCUj40g==",
++      "license": "MIT",
++      "dependencies": {
++        "jws": "^4.0.1",
++        "lodash.includes": "^4.3.0",
++        "lodash.isboolean": "^3.0.3",
++        "lodash.isinteger": "^4.0.4",
++        "lodash.isnumber": "^3.0.3",
++        "lodash.isplainobject": "^4.0.6",
++        "lodash.isstring": "^4.0.1",
++        "lodash.once": "^4.0.0",
++        "ms": "^2.1.1",
++        "semver": "^7.5.4"
++      },
++      "engines": {
++        "node": ">=12",
++        "npm": ">=6"
++      }
++    },
+     "node_modules/jsx-ast-utils": {
+       "version": "3.3.5",
+       "resolved": "https://registry.npmjs.org/jsx-ast-utils/-/jsx-ast-utils-3.3.5.tgz",
+@@ -4754,6 +5431,27 @@
+         "node": ">=4.0"
+       }
+     },
++    "node_modules/jwa": {
++      "version": "2.0.1",
++      "resolved": "https://registry.npmjs.org/jwa/-/jwa-2.0.1.tgz",
++      "integrity": "sha512-hRF04fqJIP8Abbkq5NKGN0Bbr3JxlQ+qhZufXVr0DvujKy93ZCbXZMHDL4EOtodSbCWxOqR8MS1tXA5hwqCXDg==",
++      "license": "MIT",
++      "dependencies": {
++        "buffer-equal-constant-time": "^1.0.1",
++        "ecdsa-sig-formatter": "1.0.11",
++        "safe-buffer": "^5.0.1"
++      }
++    },
++    "node_modules/jws": {
++      "version": "4.0.1",
++      "resolved": "https://registry.npmjs.org/jws/-/jws-4.0.1.tgz",
++      "integrity": "sha512-EKI/M/yqPncGUUh44xz0PxSidXFr/+r0pA70+gIYhjv+et7yxM+s29Y+VGDkovRofQem0fs7Uvf4+YmAdyRduA==",
++      "license": "MIT",
++      "dependencies": {
++        "jwa": "^2.0.1",
++        "safe-buffer": "^5.0.1"
++      }
++    },
+     "node_modules/keyv": {
+       "version": "4.5.4",
+       "resolved": "https://registry.npmjs.org/keyv/-/keyv-4.5.4.tgz",
+@@ -4832,6 +5530,42 @@
+         "url": "https://github.com/sponsors/sindresorhus"
+       }
+     },
++    "node_modules/lodash.includes": {
++      "version": "4.3.0",
++      "resolved": "https://registry.npmjs.org/lodash.includes/-/lodash.includes-4.3.0.tgz",
++      "integrity": "sha512-W3Bx6mdkRTGtlJISOvVD/lbqjTlPPUDTMnlXZFnVwi9NKJ6tiAk6LVdlhZMm17VZisqhKcgzpO5Wz91PCt5b0w==",
++      "license": "MIT"
++    },
++    "node_modules/lodash.isboolean": {
++      "version": "3.0.3",
++      "resolved": "https://registry.npmjs.org/lodash.isboolean/-/lodash.isboolean-3.0.3.tgz",
++      "integrity": "sha512-Bz5mupy2SVbPHURB98VAcw+aHh4vRV5IPNhILUCsOzRmsTmSQ17jIuqopAentWoehktxGd9e/hbIXq980/1QJg==",
++      "license": "MIT"
++    },
++    "node_modules/lodash.isinteger": {
++      "version": "4.0.4",
++      "resolved": "https://registry.npmjs.org/lodash.isinteger/-/lodash.isinteger-4.0.4.tgz",
++      "integrity": "sha512-DBwtEWN2caHQ9/imiNeEA5ys1JoRtRfY3d7V9wkqtbycnAmTvRRmbHKDV4a0EYc678/dia0jrte4tjYwVBaZUA==",
++      "license": "MIT"
++    },
++    "node_modules/lodash.isnumber": {
++      "version": "3.0.3",
++      "resolved": "https://registry.npmjs.org/lodash.isnumber/-/lodash.isnumber-3.0.3.tgz",
++      "integrity": "sha512-QYqzpfwO3/CWf3XP+Z+tkQsfaLL/EnUlXWVkIk5FUPc4sBdTehEqZONuyRt2P67PXAk+NXmTBcc97zw9t1FQrw==",
++      "license": "MIT"
++    },
++    "node_modules/lodash.isplainobject": {
++      "version": "4.0.6",
++      "resolved": "https://registry.npmjs.org/lodash.isplainobject/-/lodash.isplainobject-4.0.6.tgz",
++      "integrity": "sha512-oSXzaWypCMHkPC3NvBEaPHf0KsA5mvPrOPgQWDsbg8n7orZ290M0BmC/jgRZ4vcJ6DTAhjrsSYgdsW/F+MFOBA==",
++      "license": "MIT"
++    },
++    "node_modules/lodash.isstring": {
++      "version": "4.0.1",
++      "resolved": "https://registry.npmjs.org/lodash.isstring/-/lodash.isstring-4.0.1.tgz",
++      "integrity": "sha512-0wJxfxH1wgO3GrbuP+dTTk7op+6L41QCXbGINEmD+ny/G/eCqGzxyCsh7159S+mgDDcoarnBw6PC1PS5+wUGgw==",
++      "license": "MIT"
++    },
+     "node_modules/lodash.merge": {
+       "version": "4.6.2",
+       "resolved": "https://registry.npmjs.org/lodash.merge/-/lodash.merge-4.6.2.tgz",
+@@ -4839,6 +5573,12 @@
+       "dev": true,
+       "license": "MIT"
+     },
++    "node_modules/lodash.once": {
++      "version": "4.1.1",
++      "resolved": "https://registry.npmjs.org/lodash.once/-/lodash.once-4.1.1.tgz",
++      "integrity": "sha512-Sb487aTOCr9drQVL8pIxOzVhafOjZN9UU54hiN8PU3uAiSV7lx1yYNpbNmex2PK6dSJoNTSJUUswT651yww3Mg==",
++      "license": "MIT"
++    },
+     "node_modules/loose-envify": {
+       "version": "1.4.0",
+       "resolved": "https://registry.npmjs.org/loose-envify/-/loose-envify-1.4.0.tgz",
+@@ -4898,6 +5638,27 @@
+         "node": ">=8.6"
+       }
+     },
++    "node_modules/mime-db": {
++      "version": "1.52.0",
++      "resolved": "https://registry.npmjs.org/mime-db/-/mime-db-1.52.0.tgz",
++      "integrity": "sha512-sPU4uV7dYlvtWJxwwxHD0PuihVNiE7TyAbQ5SWxDCB9mUYvOgroQOwYQQOKPJ8CIbE+1ETVlOoK1UC2nU3gYvg==",
++      "license": "MIT",
++      "engines": {
++        "node": ">= 0.6"
++      }
++    },
++    "node_modules/mime-types": {
++      "version": "2.1.35",
++      "resolved": "https://registry.npmjs.org/mime-types/-/mime-types-2.1.35.tgz",
++      "integrity": "sha512-ZDY+bPm5zTTF+YpCrAU9nK0UgICYPT0QtT1NZWFv4s++TNkcgVaT0g6+4R2uI4MjQjzysHB1zxuWL50hzaeXiw==",
++      "license": "MIT",
++      "dependencies": {
++        "mime-db": "1.52.0"
++      },
++      "engines": {
++        "node": ">= 0.6"
++      }
++    },
+     "node_modules/minimatch": {
+       "version": "3.1.5",
+       "resolved": "https://registry.npmjs.org/minimatch/-/minimatch-3.1.5.tgz",
+@@ -4935,7 +5696,6 @@
+       "version": "2.1.3",
+       "resolved": "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz",
+       "integrity": "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==",
+-      "dev": true,
+       "license": "MIT"
+     },
+     "node_modules/mz": {
+@@ -5407,7 +6167,6 @@
+       "resolved": "https://registry.npmjs.org/pg/-/pg-8.23.0.tgz",
+       "integrity": "sha512-Ip2EQCngowJLGOfCwkFhPXU7/ljlhn6Rxlmy4XYfL2Y+vyRM59+8uR2xqRWKdYmbXmxCFOAmKxBuSUCdF34qLg==",
+       "license": "MIT",
+-      "peer": true,
+       "dependencies": {
+         "pg-connection-string": "^2.14.0",
+         "pg-pool": "^3.14.0",
+@@ -5548,7 +6307,6 @@
+         }
+       ],
+       "license": "MIT",
+-      "peer": true,
+       "dependencies": {
+         "nanoid": "^3.3.18",
+         "picocolors": "^1.1.1",
+@@ -5762,7 +6520,6 @@
+       "integrity": "sha512-WRFq3Wn3WId7LLROfMLdH7xaFr2jR62wU8nLO6rQUOLOxNZUviyJQs1M0iIhLexSFy+L+w0ch66wtoO2jRjG0A==",
+       "dev": true,
+       "license": "MIT",
+-      "peer": true,
+       "bin": {
+         "prettier": "bin/prettier.cjs"
+       },
+@@ -5872,6 +6629,15 @@
+         "react-is": "^16.13.1"
+       }
+     },
++    "node_modules/proxy-from-env": {
++      "version": "2.1.0",
++      "resolved": "https://registry.npmjs.org/proxy-from-env/-/proxy-from-env-2.1.0.tgz",
++      "integrity": "sha512-cJ+oHTW1VAEa8cJslgmUZrc+sjRKgAKl3Zyse6+PV38hZe/V6Z14TbCuXcan9F9ghlz4QrFr2c92TNF82UkYHA==",
++      "license": "MIT",
++      "engines": {
++        "node": ">=10"
++      }
++    },
+     "node_modules/punycode": {
+       "version": "2.3.1",
+       "resolved": "https://registry.npmjs.org/punycode/-/punycode-2.3.1.tgz",
+@@ -5923,7 +6689,6 @@
+       "resolved": "https://registry.npmjs.org/react/-/react-18.3.1.tgz",
+       "integrity": "sha512-wS+hAgJShR0KhEvPJArfuPVN1+Hz1t0Y6n5jLrGQbkb4urgPE/0Rve+1kMB1v/oWgHgm4WIcV+i7F2pTVj+2iQ==",
+       "license": "MIT",
+-      "peer": true,
+       "dependencies": {
+         "loose-envify": "^1.1.0"
+       },
+@@ -5936,7 +6701,6 @@
+       "resolved": "https://registry.npmjs.org/react-dom/-/react-dom-18.3.1.tgz",
+       "integrity": "sha512-5m4nQKp+rZRb09LNH59GM4BxTh9251/ylbKIbpe7TpGxfJ+9kv6BLkLBXIjjspbgbnIBNqlI23tRnTWT0snUIw==",
+       "license": "MIT",
+-      "peer": true,
+       "dependencies": {
+         "loose-envify": "^1.1.0",
+         "scheduler": "^0.23.2"
+@@ -6219,6 +6983,26 @@
+         "url": "https://github.com/sponsors/ljharb"
+       }
+     },
++    "node_modules/safe-buffer": {
++      "version": "5.2.1",
++      "resolved": "https://registry.npmjs.org/safe-buffer/-/safe-buffer-5.2.1.tgz",
++      "integrity": "sha512-rp3So07KcdmmKbGvgaNxQSJr7bGVSVk5S9Eq1F+ppbRo70+YeaDxkw5Dd8NPN+GD6bjnYm2VuPuCXmpuYvmCXQ==",
++      "funding": [
++        {
++          "type": "github",
++          "url": "https://github.com/sponsors/feross"
++        },
++        {
++          "type": "patreon",
++          "url": "https://www.patreon.com/feross"
++        },
++        {
++          "type": "consulting",
++          "url": "https://feross.org/support"
++        }
++      ],
++      "license": "MIT"
++    },
+     "node_modules/safe-push-apply": {
+       "version": "1.0.0",
+       "resolved": "https://registry.npmjs.org/safe-push-apply/-/safe-push-apply-1.0.0.tgz",
+@@ -6263,11 +7047,17 @@
+         "loose-envify": "^1.1.0"
+       }
+     },
++    "node_modules/scmp": {
++      "version": "2.1.0",
++      "resolved": "https://registry.npmjs.org/scmp/-/scmp-2.1.0.tgz",
++      "integrity": "sha512-o/mRQGk9Rcer/jEEw/yw4mwo3EU/NvYvp577/Btqrym9Qy5/MdWGBqipbALgd2lrdWTJ5/gqDusxfnQBxOxT2Q==",
++      "deprecated": "Just use Node.js's crypto.timingSafeEqual()",
++      "license": "BSD-3-Clause"
++    },
+     "node_modules/semver": {
+       "version": "7.8.5",
+       "resolved": "https://registry.npmjs.org/semver/-/semver-7.8.5.tgz",
+       "integrity": "sha512-Y7/KDsb8LjooZpwaqGyulO6DQlksgCncchHGk+sZIY4SBvUocMBEFH5Ur1fI4dV+Jvl0w6cjvucaIi40puRioA==",
+-      "dev": true,
+       "license": "ISC",
+       "bin": {
+         "semver": "bin/semver.js"
+@@ -6812,7 +7602,6 @@
+       "resolved": "https://registry.npmjs.org/tailwindcss/-/tailwindcss-3.4.19.tgz",
+       "integrity": "sha512-3ofp+LL8E+pK/JuPLPggVAIaEuhvIz4qNcf3nA1Xn2o/7fb7s/TYpHhwGDv1ZU3PkBluUVaF8PyCHcm48cKLWQ==",
+       "license": "MIT",
+-      "peer": true,
+       "dependencies": {
+         "@alloc/quick-lru": "^5.2.0",
+         "arg": "^5.0.2",
+@@ -6941,7 +7730,6 @@
+       "resolved": "https://registry.npmjs.org/picomatch/-/picomatch-4.0.7.tgz",
+       "integrity": "sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA==",
+       "license": "MIT",
+-      "peer": true,
+       "engines": {
+         "node": ">=12"
+       },
+@@ -6999,6 +7787,43 @@
+       "integrity": "sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==",
+       "license": "0BSD"
+     },
++    "node_modules/tsx": {
++      "version": "4.23.15",
++      "resolved": "https://registry.npmjs.org/tsx/-/tsx-4.23.15.tgz",
++      "integrity": "sha512-Yiex1Ovn8z2xPpOWckIiysV1SSyRMY9BkLF++q0yKiDxCqRhosKfMg3janKkiLBwZ5c/YryloKwGZcrEmtwxKw==",
++      "devOptional": true,
++      "license": "MIT",
++      "dependencies": {
++        "esbuild": "~0.28.0"
++      },
++      "bin": {
++        "tsx": "dist/cli.mjs"
++      },
++      "engines": {
++        "node": ">=18.0.0"
++      },
++      "optionalDependencies": {
++        "fsevents": "~2.3.3"
++      }
++    },
++    "node_modules/twilio": {
++      "version": "5.13.1",
++      "resolved": "https://registry.npmjs.org/twilio/-/twilio-5.13.1.tgz",
++      "integrity": "sha512-sT+PkhptF4Mf7t8eXFFvPQx4w5VHnBIPXbltGPMFRe+R2GxfRdMuFbuNA/cEm0aQR6LFQOn33+fhClg+TjRVqQ==",
++      "license": "MIT",
++      "dependencies": {
++        "axios": "^1.13.5",
++        "dayjs": "^1.11.9",
++        "https-proxy-agent": "^5.0.0",
++        "jsonwebtoken": "^9.0.3",
++        "qs": "^6.14.1",
++        "scmp": "^2.1.0",
++        "xmlbuilder": "^13.0.2"
++      },
++      "engines": {
++        "node": ">=14.0"
++      }
++    },
+     "node_modules/type-check": {
+       "version": "0.4.0",
+       "resolved": "https://registry.npmjs.org/type-check/-/type-check-0.4.0.tgz",
+@@ -7108,7 +7933,6 @@
+       "integrity": "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==",
+       "dev": true,
+       "license": "Apache-2.0",
+-      "peer": true,
+       "bin": {
+         "tsc": "bin/tsc",
+         "tsserver": "bin/tsserver"
+@@ -7493,6 +8317,15 @@
+       "dev": true,
+       "license": "ISC"
+     },
++    "node_modules/xmlbuilder": {
++      "version": "13.0.2",
++      "resolved": "https://registry.npmjs.org/xmlbuilder/-/xmlbuilder-13.0.2.tgz",
++      "integrity": "sha512-Eux0i2QdDYKbdbA6AM6xE4m6ZTZr4G4xF9kahI2ukSEMCzwce2eX9WlTI5J3s+NU7hpasFsr8hWIONae7LluAQ==",
++      "license": "MIT",
++      "engines": {
++        "node": ">=6.0"
++      }
++    },
+     "node_modules/xtend": {
+       "version": "4.0.2",
+       "resolved": "https://registry.npmjs.org/xtend/-/xtend-4.0.2.tgz",
+diff --git a/package.json b/package.json
+index c7856ac..8796da9 100644
+--- a/package.json
++++ b/package.json
+@@ -2,7 +2,7 @@
+   "name": "sitering-ai",
+   "version": "1.0.0",
+   "private": true,
+-  "description": "SiteRing AI — 24/7 AI Receptionist for UK Trade Contractors",
++  "description": "SiteRing AI \u2014 24/7 AI Receptionist for UK Trade Contractors",
+   "scripts": {
+     "dev": "next dev",
+     "build": "node scripts/assert-speech-stack.mjs && node scripts/apply-migrations.mjs && next build",
+@@ -11,7 +11,8 @@
+     "start": "next start",
+     "lint": "next lint",
+     "typecheck": "tsc --noEmit",
+-    "format": "prettier --write \"**/*.{ts,tsx,css,json,md}\""
++    "format": "prettier --write \"**/*.{ts,tsx,css,json,md}\"",
++    "test": "node --import tsx --test test/*.test.ts"
+   },
+   "dependencies": {
+     "@radix-ui/react-accordion": "^1.2.1",
+@@ -34,6 +35,7 @@
+     "stripe": "^16.12.0",
+     "tailwind-merge": "^2.5.2",
+     "tailwindcss-animate": "^1.0.7",
++    "twilio": "^5.3.0",
+     "zod": "^3.23.8"
+   },
+   "devDependencies": {
+@@ -47,6 +49,7 @@
+     "prettier": "^3.3.3",
+     "prettier-plugin-tailwindcss": "^0.6.8",
+     "tailwindcss": "^3.4.13",
++    "tsx": "^4.23.15",
+     "typescript": "^5.6.2"
+   },
+   "engines": {
+diff --git a/report b/report
+deleted file mode 100644
+index e69de29..0000000
+diff --git a/scripts/assert-speech-stack.mjs b/scripts/assert-speech-stack.mjs
+index e59f37a..79879d8 100644
+--- a/scripts/assert-speech-stack.mjs
++++ b/scripts/assert-speech-stack.mjs
+@@ -5,6 +5,11 @@ import { fileURLToPath } from "node:url";
+ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+ const skip = new Set(["node_modules", ".next", ".git", "agent/node_modules"]);
+ 
++// Fish Audio is the only permitted TTS. Deepgram, Cartesia and ElevenLabs
++// have all been in this codebase at some point; this stops one creeping back
++// in through a copy-pasted snippet.
++const BANNED = /@deepgram|DEEPGRAM_|deepgram-sdk|cartesia|CARTESIA_|elevenlabs|ELEVENLABS_/i;
++
+ async function walk(dir, found) {
+   const entries = await readdir(dir, { withFileTypes: true });
+   for (const entry of entries) {
+@@ -17,15 +22,15 @@ async function walk(dir, found) {
+     if (entry.name === "assert-speech-stack.mjs") continue;
+     if (!/\.(json|ts|tsx|mjs|js|md|sql|example)$/.test(entry.name)) continue;
+     const text = await readFile(full, "utf8");
+-    if (/@deepgram|DEEPGRAM_|deepgram-sdk/i.test(text)) found.push(full);
++    if (BANNED.test(text)) found.push(full);
+   }
+ }
+ 
+ const found = [];
+ await walk(root, found);
+ if (found.length) {
+-  console.error("Speech stack must not include Deepgram:");
++  console.error("Speech stack must be Fish Audio + OpenAI only. Found a banned provider in:");
+   for (const file of found) console.error(`  - ${file}`);
+   process.exit(1);
+ }
+-console.log("[speech] Cartesia/OpenAI stack check passed");
++console.log("[speech] Fish Audio + OpenAI stack check passed");
+diff --git a/scripts/check-env.mjs b/scripts/check-env.mjs
+index b3e69a1..1a03a52 100644
+--- a/scripts/check-env.mjs
++++ b/scripts/check-env.mjs
+@@ -6,7 +6,7 @@ const SPEC_ENV_KEYS = [
+   "LIVEKIT_API_SECRET",
+   "TWILIO_ACCOUNT_SID",
+   "TWILIO_AUTH_TOKEN",
+-  "CARTESIA_API_KEY",
++  "FISH_API_KEY",
+   "OPENAI_API_KEY",
+   "NEXT_PUBLIC_DEMO_PHONE_NUMBER",
+ ];
+diff --git a/supabase/migrations/06_twilio_compliance.sql b/supabase/migrations/06_twilio_compliance.sql
+new file mode 100644
+index 0000000..ec0a31c
+--- /dev/null
++++ b/supabase/migrations/06_twilio_compliance.sql
+@@ -0,0 +1,127 @@
++-- ─────────────────────────────────────────────────────────────────
++-- SiteRing AI · Database Schema (Migration 06)
++-- Replace the placeholder Telnyx verification fields with real Twilio
++-- Regulatory Compliance state, and record whether each contractor is a
++-- sole trader or a limited company (the two follow different UK bundles).
++--
++-- Safe to run more than once. Every step checks the current state first,
++-- so a half-applied run can simply be re-run.
++-- ─────────────────────────────────────────────────────────────────
++
++-- ═════════════════════════════════════════════════════════════════
++-- 1 · Entity type. UK trades are mostly sole traders, so that is the
++--     default; a Companies House number implies a limited company.
++-- ═════════════════════════════════════════════════════════════════
++alter table public.clients
++  add column if not exists business_type text not null default 'sole_trader';
++
++update public.clients
++   set business_type = 'limited_company'
++ where coalesce(trim(company_number), '') <> ''
++   and business_type = 'sole_trader';
++
++do $$
++begin
++  if not exists (select 1 from pg_constraint where conname = 'clients_business_type_check') then
++    alter table public.clients
++      add constraint clients_business_type_check
++      check (business_type in ('sole_trader', 'limited_company'));
++  end if;
++end $$;
++
++-- ═════════════════════════════════════════════════════════════════
++-- 2 · Rename the Telnyx columns rather than dropping them, so the
++--     statuses already captured during onboarding survive.
++-- ═════════════════════════════════════════════════════════════════
++do $$
++begin
++  if exists (select 1 from information_schema.columns
++              where table_schema = 'public' and table_name = 'clients'
++                and column_name = 'telnyx_verification_status') then
++    alter table public.clients rename column telnyx_verification_status to twilio_bundle_status;
++  end if;
++
++  if exists (select 1 from information_schema.columns
++              where table_schema = 'public' and table_name = 'clients'
++                and column_name = 'telnyx_verification_notes') then
++    alter table public.clients rename column telnyx_verification_notes to twilio_rejection_reason;
++  end if;
++
++  if exists (select 1 from information_schema.columns
++              where table_schema = 'public' and table_name = 'clients'
++                and column_name = 'telnyx_number_order_id') then
++    alter table public.clients rename column telnyx_number_order_id to twilio_phone_number_sid;
++  end if;
++end $$;
++
++-- The old constraint still names the old values; drop it before rewriting data.
++alter table public.clients drop constraint if exists clients_telnyx_status_check;
++alter table public.clients drop constraint if exists clients_twilio_bundle_status_check;
++
++-- ═════════════════════════════════════════════════════════════════
++-- 3 · Translate the existing values FIRST.
++--     The previous version of this migration added the new constraint
++--     before doing this, which fails on any pre-existing row.
++-- ═════════════════════════════════════════════════════════════════
++update public.clients set twilio_bundle_status = case twilio_bundle_status
++  when 'submitted' then 'pending-review'
++  when 'in_review' then 'in-review'
++  when 'verified'  then 'twilio-approved'
++  when 'rejected'  then 'twilio-rejected'
++  else twilio_bundle_status
++end;
++
++-- Anything unrecognised (hand-edited rows, a value from a future Twilio
++-- release) is parked at 'pending' rather than blocking the migration.
++update public.clients
++   set twilio_bundle_status = 'pending'
++ where twilio_bundle_status not in (
++   'pending','draft','pending-review','in-review',
++   'twilio-rejected','twilio-approved','provisionally-approved');
++
++-- Only now is it safe to enforce the new values.
++-- These are Twilio's own spellings; keeping them identical avoids a
++-- translation layer that would silently drift from the API.
++alter table public.clients
++  add constraint clients_twilio_bundle_status_check check (
++    twilio_bundle_status in (
++      'pending',            -- nothing submitted yet (our own pre-state)
++      'draft',              -- built but failed evaluation, not sent
++      'pending-review',
++      'in-review',
++      'twilio-rejected',
++      'twilio-approved',
++      'provisionally-approved'
++    )
++  );
++
++-- ═════════════════════════════════════════════════════════════════
++-- 4 · The SIDs we must keep to finish, re-check or renew a bundle.
++-- ═════════════════════════════════════════════════════════════════
++alter table public.clients
++  add column if not exists twilio_bundle_sid text,
++  add column if not exists twilio_end_user_sid text,
++  add column if not exists twilio_address_sid text,
++  add column if not exists twilio_document_sids jsonb not null default '[]'::jsonb,
++  -- An approved bundle expires. Twilio flips it to twilio-rejected on the
++  -- date below unless it has been re-submitted, which takes the number down
++  -- with it. A scheduled job reads this column.
++  add column if not exists twilio_valid_until timestamptz,
++  add column if not exists twilio_submitted_at timestamptz;
++
++create index if not exists clients_twilio_bundle_idx
++  on public.clients (twilio_bundle_sid)
++  where twilio_bundle_sid is not null;
++
++create index if not exists clients_twilio_valid_until_idx
++  on public.clients (twilio_valid_until)
++  where twilio_valid_until is not null;
++
++comment on column public.clients.business_type is
++  'sole_trader → Twilio individual bundle (needs proof of identity + proof of address files). limited_company → business bundle (attributes only, no upload).';
++
++comment on column public.clients.twilio_valid_until is
++  'Expiry of an approved bundle. Must be renewed before this date or Twilio rejects the bundle and the number stops working.';
++
++comment on table public.client_documents is
++  'Twilio regulatory compliance documents uploaded during onboarding. Files live in the private client-documents Storage bucket.';
+diff --git a/test/evaluation.test.ts b/test/evaluation.test.ts
+new file mode 100644
+index 0000000..2465c02
+--- /dev/null
++++ b/test/evaluation.test.ts
+@@ -0,0 +1,146 @@
++import assert from "node:assert/strict";
++import { describe, it } from "node:test";
++
++import { parseEvaluation } from "../lib/twilio/evaluation";
++
++describe("parseEvaluation", () => {
++  it("treats a compliant evaluation as passing", () => {
++    const result = parseEvaluation({ status: "compliant", results: [] });
++    assert.equal(result.compliant, true);
++    assert.deepEqual(result.failures, []);
++    assert.match(result.summary, /All regulatory requirements are met/);
++  });
++
++  it("reads per-field failures out of invalid[]", () => {
++    const result = parseEvaluation({
++      status: "noncompliant",
++      results: [
++        {
++          requirement_friendly_name: "Proof of Address",
++          passed: false,
++          valid: [],
++          invalid: [
++            {
++              friendly_name: "Utility Bill",
++              object_field: "address_sids",
++              failure_reason: "The address does not match the document.",
++              error_code: 22217,
++            },
++          ],
++        },
++      ],
++    });
++
++    assert.equal(result.compliant, false);
++    assert.equal(result.failures.length, 1);
++    assert.equal(result.failures[0].requirement, "Proof of Address");
++    assert.equal(result.failures[0].field, "Utility Bill");
++    assert.equal(result.failures[0].code, 22217);
++    assert.match(result.summary, /does not match/);
++  });
++
++  // The trap that broke an earlier version: Twilio can fail a requirement
++  // with an EMPTY invalid[], where the only reason lives one level up.
++  it("keeps the reason when invalid[] is empty", () => {
++    const result = parseEvaluation({
++      status: "noncompliant",
++      results: [
++        {
++          requirement_friendly_name: "Proof of Identity",
++          passed: false,
++          failure_reason: "No document was supplied.",
++          error_code: 22215,
++          valid: [],
++          invalid: [],
++        },
++      ],
++    });
++
++    assert.equal(result.failures.length, 1);
++    assert.equal(result.failures[0].requirement, "Proof of Identity");
++    assert.equal(result.failures[0].reason, "No document was supplied.");
++  });
++
++  it("never loses a failure just because it has no reason text", () => {
++    const result = parseEvaluation({
++      status: "noncompliant",
++      results: [{ requirement_friendly_name: "Business Address", passed: false, invalid: [] }],
++    });
++
++    assert.equal(result.failures.length, 1);
++    assert.equal(result.failures[0].reason, "No reason given.");
++  });
++
++  it("falls back to advice text when only an error code is present", () => {
++    const result = parseEvaluation({
++      status: "noncompliant",
++      results: [
++        { requirement_friendly_name: "Photo ID", passed: false, error_code: 22216, invalid: [] },
++      ],
++    });
++
++    assert.match(result.failures[0].reason, /expired/i);
++  });
++
++  it("reads camelCase keys, which the Node helper produces", () => {
++    const result = parseEvaluation({
++      status: "noncompliant",
++      results: [
++        {
++          requirementFriendlyName: "Proof of Address",
++          passed: false,
++          invalid: [{ friendlyName: "Council Tax", failureReason: "Too old.", errorCode: 22216 }],
++        },
++      ],
++    });
++
++    assert.equal(result.failures[0].requirement, "Proof of Address");
++    assert.equal(result.failures[0].field, "Council Tax");
++    assert.equal(result.failures[0].reason, "Too old.");
++  });
++
++  it("ignores requirements that passed", () => {
++    const result = parseEvaluation({
++      status: "noncompliant",
++      results: [
++        { requirement_friendly_name: "Business Address", passed: true, invalid: [] },
++        { requirement_friendly_name: "Photo ID", passed: false, failure_reason: "Blurry." },
++      ],
++    });
++
++    assert.equal(result.failures.length, 1);
++    assert.equal(result.failures[0].requirement, "Photo ID");
++  });
++
++  it("does not claim compliance when Twilio gives no detail", () => {
++    const result = parseEvaluation({ status: "noncompliant", results: [] });
++    assert.equal(result.compliant, false);
++    assert.match(result.summary, /did not say which requirement/);
++  });
++
++  it("de-duplicates identical failures and counts the rest", () => {
++    const same = {
++      requirement_friendly_name: "Proof of Address",
++      passed: false,
++      failure_reason: "Unreadable.",
++    };
++    const result = parseEvaluation({
++      status: "noncompliant",
++      results: [
++        same,
++        same,
++        { requirement_friendly_name: "Photo ID", passed: false, failure_reason: "Expired." },
++      ],
++    });
++
++    assert.match(result.summary, /^2 requirements need attention/);
++  });
++
++  it("survives junk input rather than throwing mid-call", () => {
++    for (const junk of [null, undefined, {}, { results: null }, "nonsense", 42]) {
++      const result = parseEvaluation(junk);
++      assert.equal(result.compliant, false);
++      assert.ok(result.summary.length > 0);
++    }
++  });
++});
+diff --git a/vercel.json b/vercel.json
+new file mode 100644
+index 0000000..48e3bfc
+--- /dev/null
++++ b/vercel.json
+@@ -0,0 +1,9 @@
++{
++  "$schema": "https://openapi.vercel.sh/vercel.json",
++  "crons": [
++    {
++      "path": "/api/compliance/poll",
++      "schedule": "0 * * * *"
++    }
++  ]
++}
+-- 
+2.47.3
+
