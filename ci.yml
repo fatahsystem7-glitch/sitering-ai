@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  telephony:
+    name: Telephony worker (Node)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install
+        working-directory: services/telephony-worker
+        run: npm install --no-fund --no-audit
+      - name: Test
+        working-directory: services/telephony-worker
+        run: npm test
+      - name: Syntax check all modules
+        working-directory: services/telephony-worker
+        run: for f in src/*.js; do node --check "$f"; done
+
+  agent:
+    name: Voice agent (Python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # Contract tests need the real livekit-agents to introspect against --
+      # that's the entire point of them.
+      - name: Install
+        run: pip install pytest httpx livekit-agents livekit-plugins-fishaudio
+      - name: Test
+        working-directory: services/agent
+        run: python -m pytest tests/ -q
+
+  dashboard:
+    name: Dashboard (Next.js)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install
+        working-directory: apps/dashboard
+        run: npm install --no-fund --no-audit
+      - name: Typecheck
+        working-directory: apps/dashboard
+        run: npx tsc --noEmit
+      - name: Build
+        working-directory: apps/dashboard
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder
+        run: npm run build
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No committed credentials
+        run: |
+          # Twilio's own ACaaaa… docs placeholder in test fixtures is allowed.
+          if grep -rInE "(sk-[A-Za-z0-9]{20,}|re_[A-Za-z0-9]{20,}|SK[0-9a-f]{32}|eyJhbGciOi|-----BEGIN)" \
+               --exclude-dir=node_modules --exclude-dir=.git . ; then
+            echo "::error::credential-shaped string committed"
+            exit 1
+          fi
+          echo "clean"
+      - name: No .env committed
+        run: |
+          if git ls-files | grep -E "^\.env$|\.env\.local$|\.pem$|\.key$"; then
+            echo "::error::secret file tracked"
+            exit 1
+          fi
+          echo "clean"
