@@ -63,14 +63,18 @@ and authenticate with the `x-webhook-secret` header.
 ### Client ID email
 
 After the account is created, `POST /api/onboarding` emails the contractor
-their Client ID via **Resend** (`lib/email.ts`) and can copy your team in.
-It is fully optional and never blocks signup: without `RESEND_API_KEY` the
-send is skipped, the API returns `email_sent: false`, and the success screen
-says "Screenshot it or copy it now" instead of claiming an email was sent.
+their Client ID through **Brevo SMTP with Nodemailer** (`lib/email.ts`) and can
+copy your team in. Email delivery is best-effort and never blocks signup: if
+SMTP is unavailable, the API returns `email_sent: false`, and the success
+screen says "Screenshot it or copy it now" instead of claiming an email was
+sent.
 
 ```bash
-RESEND_API_KEY=            # resend.com/api-keys
-EMAIL_FROM="SiteRing AI <onboarding@yourdomain.co.uk>"  # verified domain
+SMTP_HOST=smtp-relay.brevo.com
+SMTP_PORT=587
+SMTP_USER=                 # Brevo SMTP login
+SMTP_PASS=                 # Brevo SMTP key (secret)
+EMAIL_FROM="SiteRing AI <onboarding@yourdomain.co.uk>"  # Brevo-verified sender/domain
 EMAIL_REPLY_TO=            # optional
 ONBOARDING_NOTIFY_EMAIL=   # optional internal copy of each new signup
 ```

@@ -1,19 +1,64 @@
+import nodemailer, { type Transporter } from "nodemailer";
+
 /**
- * Transactional email (Resend).
+ * Transactional email over Brevo SMTP.
  *
- * Fully optional: if `RESEND_API_KEY` isn't set we log and no-op so the
- * onboarding flow never fails because of email. The onboarding API reports
- * whether the email actually went out, and the UI adapts its wording.
+ * Email remains best-effort so a temporary SMTP outage cannot roll back a
+ * completed onboarding. The boolean result is returned to the onboarding API,
+ * which only tells the customer an email was sent when Brevo accepted it.
  */
 
-const RESEND_ENDPOINT = "https://api.resend.com/emails";
+const REQUIRED_SMTP_ENV = [
+  "SMTP_HOST",
+  "SMTP_PORT",
+  "SMTP_USER",
+  "SMTP_PASS",
+] as const;
+
+let transporter: Transporter | undefined;
+let transporterKey: string | undefined;
 
 function fromAddress(): string {
-  return process.env.EMAIL_FROM || "SiteRing AI <onboarding@sitering.ai>";
+  return (
+    process.env.EMAIL_FROM?.trim() || "SiteRing AI <onboarding@sitering.ai>"
+  );
 }
 
 export function emailConfigured(): boolean {
-  return Boolean(process.env.RESEND_API_KEY);
+  return REQUIRED_SMTP_ENV.every((key) => Boolean(process.env[key]?.trim()));
+}
+
+function getTransporter(): Transporter | null {
+  if (!emailConfigured()) return null;
+
+  const host = process.env.SMTP_HOST!.trim();
+  const port = Number(process.env.SMTP_PORT!.trim());
+  const user = process.env.SMTP_USER!.trim();
+  const pass = process.env.SMTP_PASS!.trim();
+
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    console.error("[email] SMTP_PORT must be an integer between 1 and 65535.");
+    return null;
+  }
+
+  // Recreate the transport if environment values change during local hot reload.
+  const key = `${host}:${port}:${user}:${pass}`;
+  if (!transporter || transporterKey !== key) {
+    transporter = nodemailer.createTransport({
+      host,
+      port,
+      // Brevo uses STARTTLS on 587 and implicit TLS on 465.
+      secure: port === 465,
+      requireTLS: port !== 465,
+      auth: { user, pass },
+      connectionTimeout: 10_000,
+      greetingTimeout: 10_000,
+      socketTimeout: 20_000,
+    });
+    transporterKey = key;
+  }
+
+  return transporter;
 }
 
 type SendArgs = {
@@ -24,37 +69,48 @@ type SendArgs = {
   replyTo?: string;
 };
 
-async function send({ to, subject, html, text, replyTo }: SendArgs): Promise<boolean> {
-  const apiKey = process.env.RESEND_API_KEY;
-  if (!apiKey) {
-    console.warn("[email] RESEND_API_KEY not set — skipping send:", subject);
+async function send({
+  to,
+  subject,
+  html,
+  text,
+  replyTo,
+}: SendArgs): Promise<boolean> {
+  const smtp = getTransporter();
+  if (!smtp) {
+    const missing = REQUIRED_SMTP_ENV.filter(
+      (key) => !process.env[key]?.trim(),
+    );
+    console.warn(
+      `[email] SMTP is not configured${missing.length ? ` (missing ${missing.join(", ")})` : ""} — skipping send:`,
+      subject,
+    );
     return false;
   }
 
   try {
-    const res = await fetch(RESEND_ENDPOINT, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        from: fromAddress(),
-        to: Array.isArray(to) ? to : [to],
-        subject,
-        html,
-        text,
-        ...(replyTo ? { reply_to: replyTo } : {}),
-      }),
+    const info = await smtp.sendMail({
+      from: fromAddress(),
+      to,
+      subject,
+      html,
+      text,
+      ...(replyTo ? { replyTo } : {}),
     });
 
-    if (!res.ok) {
-      console.error("[email] Resend rejected the send:", res.status, await res.text());
+    if (info.accepted.length === 0) {
+      console.error(
+        "[email] Brevo did not accept any recipients:",
+        info.rejected,
+      );
       return false;
+    }
+    if (info.rejected.length > 0) {
+      console.warn("[email] Brevo rejected some recipients:", info.rejected);
     }
     return true;
   } catch (err) {
-    console.error("[email] Send failed:", err);
+    console.error("[email] Brevo SMTP send failed:", err);
     return false;
   }
 }
@@ -67,10 +123,9 @@ export async function sendClientIdEmail(args: {
   clientId: string;
 }): Promise<boolean> {
   const { to, ownerName, businessName, clientId } = args;
-  const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://sitering.ai").replace(
-    /\/$/,
-    "",
-  );
+  const appUrl = (
+    process.env.NEXT_PUBLIC_APP_URL || "https://sitering.ai"
+  ).replace(/\/$/, "");
   const loginUrl = `${appUrl}/login?client_id=${clientId}`;
   const firstName = ownerName.split(" ")[0] || "there";
 
@@ -138,7 +193,6 @@ export async function sendClientIdEmail(args: {
   });
 }
 
-
 /**
  * Sent the moment the number is bought and routed. This is the email the
  * contractor has actually been waiting for, so it leads with the number.
@@ -151,7 +205,9 @@ export async function sendNumberLiveEmail(args: {
   clientId: string;
 }): Promise<boolean> {
   const { to, ownerName, businessName, phoneNumber, clientId } = args;
-  const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://sitering.ai").replace(/\/$/, "");
+  const appUrl = (
+    process.env.NEXT_PUBLIC_APP_URL || "https://sitering.ai"
+  ).replace(/\/$/, "");
   const loginUrl = `${appUrl}/login?client_id=${clientId}`;
   const firstName = ownerName.split(" ")[0] || "there";
 
