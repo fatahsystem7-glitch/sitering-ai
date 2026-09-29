@@ -277,20 +277,22 @@ export async function POST(request: Request) {
       })
       .eq("id", clientId);
 
-    const emailSentOnFailure = await sendClientIdEmail({
-      to: data.email,
-      ownerName: data.owner_name,
-      businessName: data.business_name,
-      clientId,
-    });
-    await sendNewClientNotification({
-      businessName: data.business_name,
-      ownerName: data.owner_name,
-      email: data.email,
-      phone: data.phone_number,
-      clientId,
-      documentsUploaded: false,
-    });
+    const [emailSentOnFailure] = await Promise.all([
+      sendClientIdEmail({
+        to: data.email,
+        ownerName: data.owner_name,
+        businessName: data.business_name,
+        clientId,
+      }),
+      sendNewClientNotification({
+        businessName: data.business_name,
+        ownerName: data.owner_name,
+        email: data.email,
+        phone: data.phone_number,
+        clientId,
+        documentsUploaded: false,
+      }),
+    ]);
 
     return NextResponse.json(
       {
@@ -306,24 +308,26 @@ export async function POST(request: Request) {
   }
 
   // Email the Client ID (best-effort — never blocks account creation).
-  const emailSent = await sendClientIdEmail({
-    to: data.email,
-    ownerName: data.owner_name,
-    businessName: data.business_name,
-    clientId,
-  });
-  await sendNewClientNotification({
-    businessName: data.business_name,
-    ownerName: data.owner_name,
-    email: data.email,
-    phone: data.phone_number,
-    clientId,
-    documentsUploaded: true,
-  });
+  const [emailSent] = await Promise.all([
+    sendClientIdEmail({
+      to: data.email,
+      ownerName: data.owner_name,
+      businessName: data.business_name,
+      clientId,
+    }),
+    sendNewClientNotification({
+      businessName: data.business_name,
+      ownerName: data.owner_name,
+      email: data.email,
+      phone: data.phone_number,
+      clientId,
+      documentsUploaded: true,
+    }),
+  ]);
 
   // Submit the UK regulatory bundle to Twilio. Deliberately best-effort: if
   // Twilio is down or a document is unreadable the account still exists and
-  // the hourly poll retries, rather than the contractor seeing a failed signup.
+  // the scheduled poll retries, rather than the contractor seeing a failed signup.
   let complianceSubmitted = false;
   if (process.env.TWILIO_AUTO_SUBMIT !== "false") {
     try {
