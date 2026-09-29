@@ -327,7 +327,7 @@ export async function POST(request: Request) {
 
   // Submit the UK regulatory bundle to Twilio. Deliberately best-effort: if
   // Twilio is down or a document is unreadable the account still exists and
-  // the hourly poll retries, rather than the contractor seeing a failed signup.
+  // the scheduled poll retries, rather than the contractor seeing a failed signup.
   let complianceSubmitted = false;
   if (process.env.TWILIO_AUTO_SUBMIT !== "false") {
     try {
