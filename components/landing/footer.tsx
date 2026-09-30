@@ -30,6 +30,12 @@ export function Footer() {
           <Link href="/onboarding" className="hover:text-foreground">
             Sign up
           </Link>
+          <Link href="/terms" className="hover:text-foreground">
+            Terms of Service
+          </Link>
+          <Link href="/privacy" className="hover:text-foreground">
+            Privacy Policy
+          </Link>
         </nav>
         <p className="text-xs text-muted-foreground">
           © {year} SiteRing AI Ltd. Built for UK trades.

@@ -21,22 +21,45 @@ export function isAdminProfile(
  * Redirects anonymous users to /login and non-admins to /dashboard.
  */
 export async function requireAdmin(next = "/admin"): Promise<Profile> {
-  const supabase = createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const profile = await getAdminProfile();
+  if (!profile) redirect(`/login?next=${encodeURIComponent(next)}`);
+  return profile;
+}
 
-  if (!user) redirect(`/login?next=${encodeURIComponent(next)}`);
+/**
+ * Non-redirecting admin guard for API route handlers. Returns the staff
+ * profile, or null when the caller is anonymous or not staff — the route
+ * then answers with its own 401/403 JSON. Never throws: a missing Supabase
+ * configuration is treated as "not signed in" rather than a 500.
+ */
+export async function getAdminProfile(): Promise<Profile | null> {
+  let supabase: ReturnType<typeof createClient>;
+  try {
+    supabase = createClient();
+  } catch (cause) {
+    console.error("[admin] Supabase is not configured — treating as signed out:", cause);
+    return null;
+  }
 
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("*")
-    .eq("id", user.id)
-    .single();
+  try {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
 
-  if (!isAdminProfile(profile)) redirect("/dashboard");
+    if (!user) return null;
 
-  return profile as Profile;
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("id", user.id)
+      .maybeSingle();
+
+    if (!isAdminProfile(profile)) return null;
+    return profile as Profile;
+  } catch (cause) {
+    console.error("[admin] Auth lookup failed — treating as signed out:", cause);
+    return null;
+  }
 }
 
 /** Flattened customer row for the admin customers table. */

@@ -5,7 +5,6 @@ import Link from "next/link";
 import {
   ArrowLeft,
   ArrowRight,
-  BadgeCheck,
   Check,
   Loader2,
   PartyPopper,
@@ -71,6 +70,7 @@ type FormState = {
   service_requirements: string[];
   service_area: string;
   message: string;
+  consent: boolean;
 };
 
 const INITIAL: FormState = {
@@ -82,6 +82,7 @@ const INITIAL: FormState = {
   service_requirements: ["Custom website", "Automated lead capture", "Missed-call text-back"],
   service_area: "",
   message: "",
+  consent: false,
 };
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
@@ -120,6 +121,10 @@ export function OnboardingFunnel() {
     if (current === 3) {
       if (form.service_requirements.length === 0)
         return "Please choose at least one service.";
+    }
+    if (current === 4) {
+      if (!form.consent)
+        return "Please accept the Terms and Privacy Policy so we can contact you.";
     }
     return null;
   }
@@ -163,6 +168,7 @@ export function OnboardingFunnel() {
           service_requirements: form.service_requirements,
           service_area: form.service_area.trim(),
           message: form.message.trim(),
+          consent: form.consent,
         }),
       });
       const data = (await res.json().catch(() => ({}))) as { error?: string };
@@ -387,12 +393,36 @@ export function OnboardingFunnel() {
                 <ReviewRow label="Notes" value={form.message} />
               )}
             </dl>
-            <p className="flex items-start gap-2 text-xs leading-relaxed text-muted-foreground">
-              <BadgeCheck size={15} className="mt-0.5 shrink-0 text-emerald-400" />
-              By submitting you agree to be contacted about your setup. No
-              payment required now — we build first, you go live when you&apos;re
-              happy.
-            </p>
+            <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-border bg-muted/20 px-4 py-3">
+              <input
+                type="checkbox"
+                className="mt-1 h-4 w-4 accent-emerald-500"
+                checked={form.consent}
+                onChange={(e) => set("consent", e.target.checked)}
+              />
+              <span className="text-xs leading-relaxed text-muted-foreground">
+                I have read and agree to the{" "}
+                <Link
+                  href="/terms"
+                  target="_blank"
+                  className="font-semibold text-emerald-400 hover:underline"
+                >
+                  Terms of Service
+                </Link>{" "}
+                and{" "}
+                <Link
+                  href="/privacy"
+                  target="_blank"
+                  className="font-semibold text-emerald-400 hover:underline"
+                >
+                  Privacy Policy
+                </Link>
+                , and I consent to SiteRing AI storing these details and
+                contacting me about my setup. I can withdraw consent at any
+                time. No payment is required now — we build first, you go live
+                when you&apos;re happy.
+              </span>
+            </label>
           </div>
         )}
 

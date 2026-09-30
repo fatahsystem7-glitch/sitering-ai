@@ -114,6 +114,8 @@ type FormState = {
   custom_instructions: string;
   id_document_type: string;
   consent: boolean;
+  gdpr_consent: boolean;
+  marketing_consent: boolean;
 };
 
 const INITIAL: FormState = {
@@ -137,6 +139,8 @@ const INITIAL: FormState = {
   custom_instructions: "",
   id_document_type: "Passport",
   consent: false,
+  gdpr_consent: false,
+  marketing_consent: false,
 };
 
 function FileField({
@@ -210,6 +214,7 @@ export function SignupWizard() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [clientId, setClientId] = useState<string | null>(null);
+  const [phoneNumber, setPhoneNumber] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
   const [emailSent, setEmailSent] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -259,6 +264,8 @@ export function SignupWizard() {
         if (file.size > MAX_FILE_BYTES)
           return "Each document must be 10 MB or smaller.";
       }
+      if (!form.gdpr_consent)
+        return "Please accept the Terms of Service and Privacy Policy to continue.";
       if (!form.consent)
         return "Please confirm the declaration so we can verify your number.";
     }
@@ -305,6 +312,7 @@ export function SignupWizard() {
       }
 
       setClientId(json.client_id as string);
+      setPhoneNumber((json.phone_number as string | null) ?? null);
       setEmailSent(Boolean(json.email_sent));
       setWarning((json.warning as string) ?? null);
     } catch (err) {
@@ -337,11 +345,27 @@ export function SignupWizard() {
           </span>
           <CardTitle className="text-2xl">You&apos;re all set up</CardTitle>
           <CardDescription>
-            Your account and documents are saved. Verification with Twilio
-            usually completes within one working day.
+            {phoneNumber
+              ? "Your account is live and your dedicated number is already answering calls."
+              : "Your account and documents are saved. Verification with Twilio usually completes within one working day."}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-5">
+          {phoneNumber && (
+            <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/5 p-5">
+              <p className="text-xs font-semibold uppercase tracking-widest text-emerald-400">
+                Your dedicated number — bought and live
+              </p>
+              <p className="mt-2 font-mono text-xl font-bold tracking-wide">
+                {phoneNumber}
+              </p>
+              <p className="mt-2 text-xs text-muted-foreground">
+                Ring it yourself first to hear your AI receptionist. Forward your
+                mobile with <code className="font-mono">**61*{phoneNumber.replace(/\s/g, "")}#</code>{" "}
+                to catch the calls you miss.
+              </p>
+            </div>
+          )}
           <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/5 p-5">
             <p className="text-xs font-semibold uppercase tracking-widest text-emerald-400">
               Your Client ID — this is your dashboard login
@@ -736,6 +760,51 @@ export function SignupWizard() {
             />
 
             <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-border bg-muted/20 px-4 py-3">
+              <input
+                type="checkbox"
+                className="mt-1 h-4 w-4 accent-emerald-500"
+                checked={form.gdpr_consent}
+                onChange={(e) => set("gdpr_consent", e.target.checked)}
+              />
+              <span className="text-xs text-muted-foreground">
+                I have read and agree to the{" "}
+                <Link
+                  href="/terms"
+                  target="_blank"
+                  className="font-semibold text-emerald-400 hover:underline"
+                >
+                  Terms of Service
+                </Link>{" "}
+                and{" "}
+                <Link
+                  href="/privacy"
+                  target="_blank"
+                  className="font-semibold text-emerald-400 hover:underline"
+                >
+                  Privacy Policy
+                </Link>
+                , and I consent to SiteRing AI processing my personal data
+                (including the documents below) to set up and operate my AI
+                receptionist, as described in the Privacy Policy. I understand I
+                can withdraw consent at any time.
+              </span>
+            </label>
+
+            <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-border bg-muted/20 px-4 py-3">
+              <input
+                type="checkbox"
+                className="mt-1 h-4 w-4 accent-emerald-500"
+                checked={form.marketing_consent}
+                onChange={(e) => set("marketing_consent", e.target.checked)}
+              />
+              <span className="text-xs text-muted-foreground">
+                <span className="font-medium text-foreground">Optional:</span>{" "}
+                send me occasional tips and product news by email. Unticking this
+                never affects my service.
+              </span>
+            </label>
+
+            <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-emerald-500/25 bg-emerald-500/5 px-4 py-3">
               <input
                 type="checkbox"
                 className="mt-1 h-4 w-4 accent-emerald-500"

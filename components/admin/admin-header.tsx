@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  AudioLines,
   Globe,
   LogOut,
   MessagesSquare,
@@ -24,6 +25,7 @@ const TABS = [
     icon: MessagesSquare,
     exact: false,
   },
+  { href: "/admin/voice", label: "Voice Studio", icon: AudioLines, exact: false },
 ];
 
 export function AdminHeader({ adminName }: { adminName: string }) {

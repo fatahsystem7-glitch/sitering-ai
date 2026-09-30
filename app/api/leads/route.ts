@@ -14,6 +14,15 @@ const leadSchema = z.object({
   service_requirements: z.array(z.string().max(100)).max(20).optional(),
   service_area: z.string().trim().max(200).optional().or(z.literal("")),
   message: z.string().trim().max(2000).optional().or(z.literal("")),
+  // GDPR — the landing funnel's consent box (ToS + Privacy + contact).
+  consent: z
+    .union([z.boolean(), z.string()], {
+      errorMap: () => ({
+        message: "Please tick the consent box before submitting.",
+      }),
+    })
+    .transform((v) => v === true || v === "true" || v === "on")
+    .refine((v) => v === true, "Consent is required before we can contact you."),
 });
 
 function supabaseConfigured(): boolean {
@@ -74,7 +83,12 @@ export async function POST(request: Request) {
     const supabase = createAdminClient();
     const { data: inserted, error } = await supabase
       .from("leads")
-      .insert(lead)
+      .insert({
+        ...lead,
+        // GDPR audit trail — consent given, and exactly when.
+        gdpr_consent: true,
+        gdpr_consented_at: new Date().toISOString(),
+      })
       .select("id")
       .single();
 

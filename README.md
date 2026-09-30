@@ -20,15 +20,19 @@ This is the one and only customer journey in this repo.
    2. Account owner (name, email, mobile, emergency forwarding number)
    3. Registered UK address (must match the proof of address)
    4. AI receptionist setup (services, areas, hours, tone, instructions)
-   5. **Mandatory Telnyx verification uploads** — a copy of their
+   5. **Mandatory Twilio verification uploads** — a copy of their
       **ID (passport / driving licence)** and a copy of their
-      **proof of address**, plus a consent declaration.
+      **proof of address**, plus the GDPR consent box and the Twilio sharing
+      declaration.
 
 2. **`POST /api/onboarding`** (multipart) validates everything, inserts a row
    into `public.clients` — which generates the **Client ID (UUID)** — uploads
    both documents to the **private `client-documents` Storage bucket** under
-   `<client-id>/…`, records them in `public.client_documents`, and flips the
-   account to `telnyx_verification_status = 'submitted'`.
+   `<client-id>/…`, records them in `public.client_documents`, timestamps the
+   GDPR consent, submits the Twilio regulatory bundle and then **attempts to
+   buy the phone number immediately** (most UK bundles are reviewed
+   asynchronously, in which case the daily compliance cron finishes the
+   purchase the moment Twilio approves).
 
 3. The contractor is shown (and emailed) their **Client ID**. That UUID is the
    only credential they need.
@@ -60,20 +64,36 @@ Webhooks: `POST /api/webhooks/livekit-call-end` and
 `POST /api/webhooks/message` both accept `client_id` (or `assigned_number`)
 and authenticate with the `x-webhook-secret` header.
 
-### Client ID email
+### Email · Brevo SMTP (Nodemailer)
 
-After the account is created, `POST /api/onboarding` emails the contractor
-their Client ID via **Resend** (`lib/email.ts`) and can copy your team in.
-It is fully optional and never blocks signup: without `RESEND_API_KEY` the
+Transactional email is sent through **Brevo SMTP** with a **Nodemailer**
+helper consolidated into `lib/email.ts` (the standalone helper from the
+earlier test deployment now lives here, in the single project). It emails the
+contractor their Client ID at signup, the number-live email when provisioning
+completes, and can copy your team in on each new signup.
+
+It is fully optional and never blocks signup: without SMTP credentials the
 send is skipped, the API returns `email_sent: false`, and the success screen
 says "Screenshot it or copy it now" instead of claiming an email was sent.
 
 ```bash
-RESEND_API_KEY=            # resend.com/api-keys
-EMAIL_FROM="SiteRing AI <onboarding@yourdomain.co.uk>"  # verified domain
-EMAIL_REPLY_TO=            # optional
-ONBOARDING_NOTIFY_EMAIL=   # optional internal copy of each new signup
+# Brevo dashboard → SMTP & API → SMTP. Either the single URL…
+BREVO_SMTP_URL="smtp://<smtp-login>:<smtp-key>@smtp-relay.brevo.com:587"
+# …or the discrete pair:
+BREVO_SMTP_LOGIN=""        # Brevo SMTP login
+BREVO_SMTP_KEY=""          # Brevo SMTP key
+SMTP_HOST="smtp-relay.brevo.com"  # default
+SMTP_PORT="587"                   # default (465 = implicit TLS)
+EMAIL_FROM="SiteRing AI <onboarding@yourdomain.co.uk>"  # validated Brevo sender
+EMAIL_REPLY_TO=""          # optional
+ONBOARDING_NOTIFY_EMAIL="" # optional internal copy of each new signup
 ```
+
+`npm run check-env` verifies every integration's variables (Supabase, Twilio,
+Brevo SMTP, LiveKit, Stripe, Fish Audio, OpenAI) are present; add `--all` to
+fail on optional integrations too. Once deployed, `GET /api/admin/diagnostics`
+(admin session required) reports the same live from the server, including the
+effective modular voice pipeline.
 
 ### Required environment variables
 
@@ -98,6 +118,7 @@ the onboarding form.
 | Icons      | Lucide React                                                  |
 | Database   | Supabase Postgres with Row Level Security                     |
 | Auth       | Supabase Auth (email/password)                                |
+| Email      | Brevo SMTP via Nodemailer (transactional)                     |
 | Billing    | Stripe subscriptions (no trial) + metered overage billing     |
 | Voice AI   | Twilio UK SIP → LiveKit Agents → OpenAI gpt-4o-transcribe STT + Fish Audio s2.1-pro TTS → OpenAI gpt-4o-mini |
 
@@ -109,7 +130,8 @@ sitering-ai/
 │   ├── page.tsx                      # Direct-response landing page
 │   ├── login/ & signup/              # Supabase email/password auth
 │   ├── dashboard/                    # Client portal (KPIs, usage, calls, settings)
-│   ├── admin/                        # Staff-only: overview, customers, conversations
+│   ├── admin/                        # Staff-only: overview, customers, conversations, voice
+│   ├── terms/ & privacy/             # Legal templates (ToS + UK GDPR privacy policy)
 │   ├── demo/ & admin-demo/           # No-login mock previews (sample data)
 │   └── api/
 │       ├── checkout/                 # Stripe Checkout session (no trial)
@@ -124,9 +146,13 @@ sitering-ai/
 │   └── admin/                        # MetricCards, CustomersTable, ConversationsExplorer
 ├── lib/
 │   ├── admin.ts                      # requireAdmin() guard + admin types
+│   ├── email.ts                      # Brevo SMTP + Nodemailer helper
 │   ├── site.ts                       # Public constants (demo-call number)
 │   ├── supabase/{client,server,admin,types}.ts
 │   ├── prompts/receptionist.ts       # AI voice receptionist system prompt
+│   ├── prompts/admin-config.ts       # Voice Studio configuration prompt
+│   ├── twilio/                       # client, compliance, provisioning, sync
+│   ├── voice/                        # Modular provider settings + param sync
 │   ├── stripe.ts                     # Stripe client + pricing constants
 │   └── utils.ts
 ├── supabase/migrations/
@@ -160,6 +186,10 @@ The SQL editor is not required.
 1. `01_schema.sql` — profiles, telephony, call logs, RLS
 2. `02_admin.sql` — admin flags and call enrichment
 3. `03_business_profiles.sql` — receptionist profile, demo setting, callbacks
+4. `04_leads.sql` — landing-funnel lead intake
+5. `05_client_onboarding.sql` — clients, documents, dashboard tables
+6. `06_twilio_compliance.sql` — Twilio regulatory state
+7. `07_voice_configuration.sql` — voice provider settings, config audit trail, GDPR consent columns
 
 ### Voice agent
 
@@ -216,6 +246,8 @@ NEXT_PUBLIC_APP_URL="http://localhost:3000"
 NEXT_PUBLIC_SUPABASE_URL="https://xxx.supabase.co"
 NEXT_PUBLIC_SUPABASE_ANON_KEY="..."
 SUPABASE_SERVICE_ROLE_KEY="..."
+BREVO_SMTP_LOGIN="..."                       # Brevo SMTP (email)
+BREVO_SMTP_KEY="..."
 STRIPE_SECRET_KEY="sk_test_..."
 STRIPE_WEBHOOK_SECRET="whsec_..."
 STRIPE_PRICE_ID_SUBSCRIPTION="price_..."
@@ -244,6 +276,48 @@ usage — plus **pause/resume answering** and **minute-cap adjustment**.
 Conversations tab searches every call across accounts with transcripts, AI
 summaries, recordings (when the voice agent attaches `recording_url`) and
 repeat-caller history.
+
+## Admin Voice Studio (`/admin/voice`)
+
+The administrator picks a client account, clicks **Launch live voice session**
+and configures that client's AI receptionist — business name, operating
+hours, services, greeting style, extra instructions — by *talking* to the
+configuration agent over LiveKit WebRTC.
+
+- `POST /api/admin/voice/session` creates the room `voice-config-<client_id>`,
+  dispatches the agent and returns a browser join token.
+- The agent (same worker as the phone line) runs the configuration prompt and
+  calls `update_receptionist_config` the moment a parameter is confirmed.
+- `POST /api/webhooks/voice-config` (secret-authenticated, service role)
+  writes each captured parameter straight to that client's row in Supabase,
+  appends an audit row to `voice_config_updates`, and the studio panel updates
+  live over the room's data channel.
+- A manual form on the same page covers the same fields by keyboard.
+
+### Modular voice providers
+
+The pipeline assembles itself per session from `voice_provider_settings`
+(edited in the studio; env fallback):
+
+| Slot | Options |
+| --- | --- |
+| TTS | **Fish Audio** `fishaudio/s2.1-pro` (default) · `s2.1-mini` · **OpenAI** `tts-1` / `gpt-4o-mini-tts` |
+| STT | OpenAI `gpt-4o-transcribe` (default) · `whisper-1` |
+| LLM | OpenAI `gpt-4o-mini` (default) · `gpt-4o` |
+
+Fish Audio's latency mode (`low` by default) trades a little prosody for a
+faster first syllable — what you want on a phone call.
+
+## Legal & GDPR
+
+- `/terms` and `/privacy` render full Terms of Service and Privacy Policy
+  (UK GDPR / Data Protection Act 2018) templates, linked from the landing
+  footer and the dashboard footer.
+- Every customer-facing data-collection form carries a consent checkbox:
+  the 5-step signup (required GDPR consent, recorded on `clients` with a
+  timestamp + optional marketing consent) and the landing funnel (required
+  consent, recorded on `leads`).
+- KYC uploads additionally require the explicit Twilio-sharing declaration.
 
 ## Voice Agent Integration (LiveKit / Twilio)
 
@@ -296,6 +370,10 @@ subscriber settings page.
 3. Add all `.env.local` values as **Environment Variables**
 4. Update Supabase redirect URLs, Stripe webhook URL and voice-agent webhook
    to the production domain
+
+`vercel.json` schedules the compliance poll (`/api/compliance/poll`) **daily
+at 00:00 UTC** (`0 0 * * *`) — the Hobby plan only allows cron jobs that run
+once per day, and an hourly schedule blocks the deployment.
 
 ## Scripts
 

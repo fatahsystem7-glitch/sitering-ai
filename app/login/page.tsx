@@ -98,11 +98,12 @@ function LoginForm() {
           <p className="text-sm text-muted-foreground">
             No account yet?{" "}
             <Link
-              href="/onboarding"
+              href="/signup"
               className="font-semibold text-emerald-400 hover:underline"
             >
-              Start onboarding
-            </Link>
+              Sign up
+            </Link>{" "}
+            — it takes about five minutes.
           </p>
         </CardFooter>
       </form>
