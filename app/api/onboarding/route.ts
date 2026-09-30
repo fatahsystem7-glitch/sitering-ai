@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { createClient } from "@/lib/supabase/server";
 import { sendClientIdEmail, sendNewClientNotification, sendNumberLiveEmail } from "@/lib/email";
 import type { ClientInsert } from "@/lib/supabase/types";
 
@@ -28,6 +29,13 @@ const onboardingSchema = z.object({
   // Contact
   owner_name: z.string().trim().min(2, "Your name is required").max(200),
   email: z.string().trim().email("A valid email is required").max(200),
+  // The dashboard login they choose on the form. Supabase Auth caps passwords
+  // at 72 bytes (bcrypt), so the same limit is enforced here rather than
+  // failing later inside the auth admin API.
+  password: z
+    .string()
+    .min(8, "Choose a password of at least 8 characters.")
+    .max(72, "Passwords must be 72 characters or fewer."),
   phone_number: z.string().trim().min(6, "A contact number is required").max(50),
   emergency_forwarding_number: z.string().trim().max(50).optional().or(z.literal("")),
 
@@ -118,6 +126,7 @@ export async function POST(request: Request) {
     vat_number: String(form.get("vat_number") ?? ""),
     owner_name: String(form.get("owner_name") ?? ""),
     email: String(form.get("email") ?? ""),
+    password: String(form.get("password") ?? ""),
     phone_number: String(form.get("phone_number") ?? ""),
     emergency_forwarding_number: String(form.get("emergency_forwarding_number") ?? ""),
     address_line1: String(form.get("address_line1") ?? ""),
@@ -178,6 +187,10 @@ export async function POST(request: Request) {
   const supabase = createAdminClient();
 
   // ── Duplicate email guard ───────────────────────────────────────
+  // This is load-bearing, not just tidiness: /api/onboarding is public and
+  // unauthenticated, so "the email is already taken" is exactly what stops
+  // someone submitting a contractor's address to seize their account.
+  // The unique index on lower(email) backs it up at the database level.
   const { data: existing, error: existingError } = await supabase
     .from("clients")
     .select("id")
@@ -197,13 +210,61 @@ export async function POST(request: Request) {
       {
         ok: false,
         error:
-          "An account already exists for that email. Use your Client ID to log in, or contact support if you've lost it.",
+          "An account already exists for that email. Log in with your email and password — or, if your account predates email login, with your Client ID.",
       },
       { status: 409 },
     );
   }
 
-  // ── 1. Create the account row → this generates the Client ID ────
+  // ── 1. Create the Supabase Auth user (email + password) ─────────
+  // These are the credentials the contractor chose moments ago on a form they
+  // control, so they are confirmed on the spot rather than bounced through an
+  // email round-trip they would have to complete before reaching a dashboard
+  // they have already paid to set up.
+  let authUserId: string;
+  try {
+    const { data: authUser, error: authError } = await supabase.auth.admin.createUser({
+      email: data.email,
+      password: data.password,
+      email_confirm: true,
+      user_metadata: {
+        business_name: data.business_name,
+        owner_name: data.owner_name,
+        account_type: "client",
+      },
+    });
+
+    if (authError || !authUser?.user) {
+      const message = authError?.message ?? "Could not create the login.";
+      console.error("[onboarding] Auth user creation failed:", message);
+      if (/already registered|already exists/i.test(message)) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error:
+              "That email already has a login. Log in with it, or reset your password if you've forgotten it.",
+          },
+          { status: 409 },
+        );
+      }
+      if (/password/i.test(message)) {
+        return NextResponse.json({ ok: false, error: message }, { status: 400 });
+      }
+      return NextResponse.json(
+        { ok: false, error: "We couldn't create your login. Please try again." },
+        { status: 502 },
+      );
+    }
+    authUserId = authUser.user.id;
+  } catch (cause) {
+    console.error("[onboarding] Auth admin API unavailable:", cause);
+    return NextResponse.json(
+      { ok: false, error: "The login service is unavailable. Please try again shortly." },
+      { status: 502 },
+    );
+  }
+
+  // ── 2. Create the account row → this generates the Client ID ────
   const insert: ClientInsert = {
     business_name: data.business_name,
     trade_type: data.trade_type || null,
@@ -234,6 +295,8 @@ export async function POST(request: Request) {
     gdpr_consent: data.gdpr_consent,
     gdpr_consented_at: data.gdpr_consent ? new Date().toISOString() : null,
     marketing_consent: data.marketing_consent ?? false,
+    // The email + password login this account signs in with.
+    owner_auth_user_id: authUserId,
   };
 
   const { data: client, error: insertError } = await supabase
@@ -244,6 +307,13 @@ export async function POST(request: Request) {
 
   if (insertError || !client) {
     console.error("[onboarding] Failed to create client:", insertError);
+    // Roll the fresh Auth user back, so retrying the form isn't stuck on
+    // "already registered" for an account that was never created.
+    try {
+      await supabase.auth.admin.deleteUser(authUserId);
+    } catch (rollbackError) {
+      console.warn("[onboarding] Could not roll back the Auth user:", rollbackError);
+    }
     return NextResponse.json(
       { ok: false, error: "We couldn't create your account. Please try again." },
       { status: 500 },
@@ -251,6 +321,28 @@ export async function POST(request: Request) {
   }
 
   const clientId = client.id as string;
+
+  /**
+   * Signs the new contractor in on this device (writes the Supabase session
+   * cookies). Best-effort — if it fails they simply log in on the login page
+   * with the email and password they just chose.
+   */
+  async function signThemIn(): Promise<boolean> {
+    try {
+      const { error } = await createClient().auth.signInWithPassword({
+        email: data.email,
+        password: data.password,
+      });
+      if (error) {
+        console.warn("[onboarding] Auto sign-in failed:", error.message);
+        return false;
+      }
+      return true;
+    } catch (cause) {
+      console.warn("[onboarding] Auto sign-in failed:", cause);
+      return false;
+    }
+  }
 
   // ── 2. Upload the KYC documents to the private bucket ───────────
   async function upload(file: File, kind: "id_document" | "proof_of_address") {
@@ -326,10 +418,13 @@ export async function POST(request: Request) {
       documentsUploaded: false,
     });
 
+    const signedInAfterFailure = await signThemIn();
+
     return NextResponse.json(
       {
         ok: true,
         client_id: clientId,
+        signed_in: signedInAfterFailure,
         email_sent: emailSentOnFailure,
         documents_uploaded: false,
         warning:
@@ -446,10 +541,14 @@ export async function POST(request: Request) {
     }
   }
 
+  // ── Sign them straight in (sets the Supabase session cookies) ───
+  const signedIn = await signThemIn();
+
   return NextResponse.json(
     {
       ok: true,
       client_id: clientId,
+      signed_in: signedIn,
       email_sent: emailSent,
       documents_uploaded: true,
       compliance_submitted: complianceSubmitted,

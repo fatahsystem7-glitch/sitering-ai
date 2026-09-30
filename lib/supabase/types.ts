@@ -111,7 +111,11 @@ export type OnboardingStatus =
 
 /**
  * A trade contractor account created through the public onboarding form.
- * `id` IS the Client ID (UUID) used to log into the single /dashboard.
+ *
+ * `id` IS the Client ID (UUID) — still the human-readable account reference
+ * used for telephony, support and audit, and still the login credential for
+ * legacy accounts. Accounts created since email login was introduced also
+ * carry `owner_auth_user_id`, the Supabase Auth user they sign in as.
  */
 export type Client = {
   id: string;
@@ -121,6 +125,13 @@ export type Client = {
   vat_number: string | null;
   owner_name: string;
   email: string;
+  /**
+   * The Supabase Auth (email + password) user that owns this account.
+   * Null for legacy accounts, which continue to authenticate with their
+   * Client ID — see `lib/client-session.ts` for both resolution paths.
+   */
+  owner_auth_user_id: string | null;
+
   phone_number: string | null;
   emergency_forwarding_number: string;
   address_line1: string | null;

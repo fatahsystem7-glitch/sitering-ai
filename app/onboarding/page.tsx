@@ -50,9 +50,9 @@ export default function OnboardingPage() {
             Get your AI receptionist answering in days, not weeks
           </h1>
           <p className="mt-4 max-w-md text-muted-foreground">
-            Five short steps. You&apos;ll finish with a unique Client ID — that
-            single ID is how you log into your dashboard, no passwords to
-            remember.
+            Five short steps. You&apos;ll choose the email and password you log
+            in with, and finish with a dedicated UK number your AI receptionist
+            is already answering.
           </p>
           <ul className="mt-8 space-y-4">
             {BENEFITS.map(([title, body]) => (

@@ -145,7 +145,13 @@ async function send({ to, subject, html, text, replyTo }: SendArgs): Promise<boo
   }
 }
 
-/** Sends the contractor their Client ID — their only dashboard credential. */
+/**
+ * Sends the contractor their account details right after signup.
+ *
+ * The dashboard login is the email + password they chose on the form, so this
+ * email leads with that and presents the Client ID as the account reference
+ * our support team uses.
+ */
 export async function sendClientIdEmail(args: {
   to: string;
   ownerName: string;
@@ -158,7 +164,7 @@ export async function sendClientIdEmail(args: {
     /\/$/,
     "",
   );
-  const loginUrl = `${appUrl}/login?client_id=${clientId}`;
+  const loginUrl = `${appUrl}/login`;
   const firstName = ownerName.split(" ")[0] || "there";
 
   const text = [
@@ -166,7 +172,9 @@ export async function sendClientIdEmail(args: {
     ``,
     `Your SiteRing AI account for ${businessName} is set up.`,
     ``,
-    `Your Client ID (this is your dashboard login — keep it safe):`,
+    `You log in with your email address (${to}) and the password you chose.`,
+    ``,
+    `Your account reference (Client ID) — quote this if you contact support:`,
     clientId,
     ``,
     phoneNumber
@@ -198,8 +206,9 @@ export async function sendClientIdEmail(args: {
       <tr>
         <td style="padding:20px 28px 0;">
           <div style="border:1px solid rgba(52,211,153,.3);background:rgba(52,211,153,.07);border-radius:14px;padding:18px;">
-            <p style="margin:0;font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#34d399;">Your Client ID — this is your dashboard login</p>
+            <p style="margin:0;font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#34d399;">Your account reference (Client ID)</p>
             <p style="margin:10px 0 0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:16px;font-weight:700;color:#ffffff;word-break:break-all;">${escapeHtml(clientId)}</p>
+            <p style="margin:12px 0 0;font-size:13px;line-height:1.6;color:#9fb0b0;">You sign in with <strong style="color:#e7ecec;">${escapeHtml(to)}</strong> and the password you chose at signup.</p>
           </div>
           ${
             phoneNumber
@@ -224,7 +233,7 @@ export async function sendClientIdEmail(args: {
             }
           </p>
           <p style="margin:18px 0 0;font-size:13px;line-height:1.6;color:#6f8382;">
-            Keep this Client ID somewhere safe — anyone with it can view your call logs. If you lose it, reply to this email and we'll help.
+            Forgot your password? Use &ldquo;Forgot password?&rdquo; on the login page and we&rsquo;ll email you a reset link. Anything else, just reply to this email.
           </p>
         </td>
       </tr>
@@ -236,7 +245,7 @@ export async function sendClientIdEmail(args: {
     to,
     subject: phoneNumber
       ? `Your SiteRing AI number is live: ${phoneNumber}`
-      : `Your SiteRing AI Client ID for ${businessName}`,
+      : `Your SiteRing AI account for ${businessName} is set up`,
     html,
     text,
   });
@@ -255,7 +264,7 @@ export async function sendNumberLiveEmail(args: {
 }): Promise<boolean> {
   const { to, ownerName, businessName, phoneNumber, clientId } = args;
   const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://sitering.ai").replace(/\/$/, "");
-  const loginUrl = `${appUrl}/login?client_id=${clientId}`;
+  const loginUrl = `${appUrl}/login`;
   const firstName = ownerName.split(" ")[0] || "there";
 
   const text = [
@@ -272,6 +281,8 @@ export async function sendNumberLiveEmail(args: {
     `  **61*${phoneNumber.replace(/\s/g, "")}#   (forward when unanswered)`,
     ``,
     `Your dashboard: ${loginUrl}`,
+    ``,
+    `Account reference (Client ID): ${clientId}`,
     ``,
     `— SiteRing AI`,
   ].join("\n");
