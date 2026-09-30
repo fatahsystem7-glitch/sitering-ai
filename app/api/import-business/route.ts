@@ -67,7 +67,16 @@ function htmlToText(html: string): string {
 }
 
 export async function POST(request: Request) {
-  const supabase = createClient();
+  let supabase: ReturnType<typeof createClient>;
+  try {
+    supabase = createClient();
+  } catch {
+    return NextResponse.json(
+      { error: "Supabase is not configured on this deployment." },
+      { status: 503 },
+    );
+  }
+
   const {
     data: { user },
   } = await supabase.auth.getUser();

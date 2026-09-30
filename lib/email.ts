@@ -1,19 +1,112 @@
 /**
- * Transactional email (Resend).
+ * Transactional email — Brevo SMTP via Nodemailer.
  *
- * Fully optional: if `RESEND_API_KEY` isn't set we log and no-op so the
+ * Consolidated from the standalone test deployment into this single project.
+ * Configuration (any of these combos works):
+ *
+ *   BREVO_SMTP_URL=smtp://<login>:<smtp-key>@smtp-relay.brevo.com:587
+ *
+ *   …or the discrete variables:
+ *   SMTP_HOST=smtp-relay.brevo.com     (default)
+ *   SMTP_PORT=587                      (default; 465 implies TLS)
+ *   SMTP_USER=<brevo smtp login>       (alias: BREVO_SMTP_LOGIN)
+ *   SMTP_PASS=<brevo smtp key>         (alias: BREVO_SMTP_KEY)
+ *
+ * Fully optional: when no SMTP credentials are set we log and no-op so the
  * onboarding flow never fails because of email. The onboarding API reports
  * whether the email actually went out, and the UI adapts its wording.
  */
 
-const RESEND_ENDPOINT = "https://api.resend.com/emails";
+import nodemailer, { type Transporter } from "nodemailer";
 
+const DEFAULT_HOST = "smtp-relay.brevo.com";
+const DEFAULT_PORT = 587;
+
+/** The From header — Brevo requires a validated sender on the account. */
 function fromAddress(): string {
-  return process.env.EMAIL_FROM || "SiteRing AI <onboarding@sitering.ai>";
+  return (
+    process.env.EMAIL_FROM ||
+    "SiteRing AI <onboarding@sitering.ai>"
+  );
+}
+
+function replyToAddress(): string | undefined {
+  return process.env.EMAIL_REPLY_TO?.trim() || undefined;
+}
+
+type SmtpConfig = {
+  host: string;
+  port: number;
+  secure: boolean;
+  user: string;
+  pass: string;
+};
+
+/**
+ * Reads the Brevo SMTP configuration from the environment.
+ * Returns null when email is not configured (dev / not yet set up).
+ */
+function smtpConfig(): SmtpConfig | null {
+  // 1 · Single-URL form: BREVO_SMTP_URL (or the generic SMTP_URL).
+  const url =
+    process.env.BREVO_SMTP_URL?.trim() || process.env.SMTP_URL?.trim();
+  if (url) {
+    try {
+      const parsed = new URL(url);
+      const user = decodeURIComponent(parsed.username || "");
+      const pass = decodeURIComponent(parsed.password || "");
+      if (user && pass) {
+        return {
+          host: parsed.hostname || DEFAULT_HOST,
+          port: Number(parsed.port || DEFAULT_PORT),
+          secure: (parsed.protocol === "smtps:" || Number(parsed.port) === 465),
+          user,
+          pass,
+        };
+      }
+    } catch {
+      console.error("[email] BREVO_SMTP_URL is not a valid URL — ignoring it.");
+    }
+  }
+
+  // 2 · Discrete form. Brevo names win over the generic SMTP_ ones.
+  const user =
+    process.env.BREVO_SMTP_LOGIN?.trim() || process.env.SMTP_USER?.trim() || "";
+  const pass =
+    process.env.BREVO_SMTP_KEY?.trim() || process.env.SMTP_PASS?.trim() || "";
+
+  if (!user || !pass) return null;
+
+  const port = Number(process.env.SMTP_PORT?.trim() || DEFAULT_PORT);
+  return {
+    host: process.env.SMTP_HOST?.trim() || DEFAULT_HOST,
+    port,
+    secure: port === 465,
+    user,
+    pass,
+  };
 }
 
 export function emailConfigured(): boolean {
-  return Boolean(process.env.RESEND_API_KEY);
+  return smtpConfig() !== null;
+}
+
+/** Lazily-created transporter — importable at build time without credentials. */
+let cachedTransport: Transporter | null = null;
+
+function transporter(): Transporter | null {
+  if (cachedTransport) return cachedTransport;
+
+  const config = smtpConfig();
+  if (!config) return null;
+
+  cachedTransport = nodemailer.createTransport({
+    host: config.host,
+    port: config.port,
+    secure: config.secure,
+    auth: { user: config.user, pass: config.pass },
+  });
+  return cachedTransport;
 }
 
 type SendArgs = {
@@ -25,36 +118,29 @@ type SendArgs = {
 };
 
 async function send({ to, subject, html, text, replyTo }: SendArgs): Promise<boolean> {
-  const apiKey = process.env.RESEND_API_KEY;
-  if (!apiKey) {
-    console.warn("[email] RESEND_API_KEY not set — skipping send:", subject);
+  const mailer = transporter();
+  if (!mailer) {
+    console.warn("[email] Brevo SMTP not configured — skipping send:", subject);
     return false;
   }
 
   try {
-    const res = await fetch(RESEND_ENDPOINT, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        from: fromAddress(),
-        to: Array.isArray(to) ? to : [to],
-        subject,
-        html,
-        text,
-        ...(replyTo ? { reply_to: replyTo } : {}),
-      }),
+    const info = await mailer.sendMail({
+      from: fromAddress(),
+      to: Array.isArray(to) ? to.join(", ") : to,
+      subject,
+      text,
+      html,
+      replyTo: replyTo ?? replyToAddress(),
     });
 
-    if (!res.ok) {
-      console.error("[email] Resend rejected the send:", res.status, await res.text());
+    if (!info.messageId) {
+      console.error("[email] Brevo accepted no message id for:", subject);
       return false;
     }
     return true;
   } catch (err) {
-    console.error("[email] Send failed:", err);
+    console.error("[email] Brevo send failed:", err);
     return false;
   }
 }
@@ -65,8 +151,9 @@ export async function sendClientIdEmail(args: {
   ownerName: string;
   businessName: string;
   clientId: string;
+  phoneNumber?: string | null;
 }): Promise<boolean> {
-  const { to, ownerName, businessName, clientId } = args;
+  const { to, ownerName, businessName, clientId, phoneNumber } = args;
   const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://sitering.ai").replace(
     /\/$/,
     "",
@@ -82,11 +169,15 @@ export async function sendClientIdEmail(args: {
     `Your Client ID (this is your dashboard login — keep it safe):`,
     clientId,
     ``,
-    `Open your dashboard: ${loginUrl}`,
+    phoneNumber
+      ? `Your dedicated phone number: ${phoneNumber}`
+      : `We've received your ID and proof of address and submitted them to Twilio`,
+    phoneNumber
+      ? `Your AI receptionist is answering it now.`
+      : `for UK number verification. That usually takes one to three working days —`,
+    phoneNumber ? `` : `we'll email you as soon as your number is live.`,
     ``,
-    `We've received your ID and proof of address and submitted them to Twilio`,
-    `for UK number verification. That usually takes one to three working days —`,
-    `we'll email you as soon as your number is live.`,
+    `Open your dashboard: ${loginUrl}`,
     ``,
     `— The SiteRing AI team`,
   ].join("\n");
@@ -110,6 +201,14 @@ export async function sendClientIdEmail(args: {
             <p style="margin:0;font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#34d399;">Your Client ID — this is your dashboard login</p>
             <p style="margin:10px 0 0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:16px;font-weight:700;color:#ffffff;word-break:break-all;">${escapeHtml(clientId)}</p>
           </div>
+          ${
+            phoneNumber
+              ? `<div style="margin-top:14px;border:1px solid rgba(52,211,153,.3);background:rgba(52,211,153,.07);border-radius:14px;padding:18px;">
+                   <p style="margin:0;font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#34d399;">Your dedicated number — live now</p>
+                   <p style="margin:10px 0 0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:16px;font-weight:700;color:#ffffff;">${escapeHtml(phoneNumber)}</p>
+                 </div>`
+              : ``
+          }
           <p style="margin:20px 0 0;">
             <a href="${loginUrl}" style="display:inline-block;background:#10b981;color:#04150f;text-decoration:none;font-weight:700;font-size:15px;padding:12px 22px;border-radius:12px;">Open my dashboard</a>
           </p>
@@ -118,7 +217,11 @@ export async function sendClientIdEmail(args: {
       <tr>
         <td style="padding:22px 28px 30px;">
           <p style="margin:0;font-size:14px;line-height:1.6;color:#9fb0b0;">
-            We've received your ID and proof of address and submitted them to <strong style="color:#e7ecec;">Twilio</strong> for UK number verification. That usually completes within one working day — we'll email you the moment your number is live.
+            ${
+              phoneNumber
+                ? `Your AI receptionist is answering <strong style="color:#e7ecec;">${escapeHtml(phoneNumber)}</strong> now — ring it yourself first to hear how it sounds.`
+                : `We've received your ID and proof of address and submitted them to <strong style="color:#e7ecec;">Twilio</strong> for UK number verification. That usually completes within one working day — we'll email you the moment your number is live.`
+            }
           </p>
           <p style="margin:18px 0 0;font-size:13px;line-height:1.6;color:#6f8382;">
             Keep this Client ID somewhere safe — anyone with it can view your call logs. If you lose it, reply to this email and we'll help.
@@ -131,13 +234,13 @@ export async function sendClientIdEmail(args: {
 
   return send({
     to,
-    subject: `Your SiteRing AI Client ID for ${businessName}`,
+    subject: phoneNumber
+      ? `Your SiteRing AI number is live: ${phoneNumber}`
+      : `Your SiteRing AI Client ID for ${businessName}`,
     html,
     text,
-    replyTo: process.env.EMAIL_REPLY_TO,
   });
 }
-
 
 /**
  * Sent the moment the number is bought and routed. This is the email the
@@ -204,7 +307,6 @@ export async function sendNumberLiveEmail(args: {
     subject: `Your SiteRing AI number is live: ${phoneNumber}`,
     html,
     text,
-    replyTo: process.env.EMAIL_REPLY_TO,
   });
 }
 

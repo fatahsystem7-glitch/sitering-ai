@@ -39,7 +39,15 @@ function trunkSid(): string {
 }
 
 export async function provisionNumber(client: ProvisionInput): Promise<ProvisionResult> {
-  if (!client.twilio_bundle_sid || !client.twilio_address_sid) {
+  // Explicit opt-out for test deployments / countries whose numbers carry no
+  // regulatory requirement. UK GB-local numbers always need the bundle, so
+  // leaving this unset keeps the strict default.
+  const allowWithoutBundle = process.env.TWILIO_PROVISION_WITHOUT_BUNDLE === "true";
+
+  if (
+    !allowWithoutBundle &&
+    (!client.twilio_bundle_sid || !client.twilio_address_sid)
+  ) {
     throw new Error("Cannot buy a UK number before the regulatory bundle is approved.");
   }
 
@@ -66,8 +74,8 @@ export async function provisionNumber(client: ProvisionInput): Promise<Provision
   const purchased = await api.incomingPhoneNumbers.create({
     phoneNumber: available[0].phoneNumber,
     friendlyName: `${client.business_name} (SiteRing)`,
-    bundleSid: client.twilio_bundle_sid,
-    addressSid: client.twilio_address_sid,
+    ...(client.twilio_bundle_sid ? { bundleSid: client.twilio_bundle_sid } : {}),
+    ...(client.twilio_address_sid ? { addressSid: client.twilio_address_sid } : {}),
   });
 
   // Route it into LiveKit. If this fails the number exists but is deaf, so the

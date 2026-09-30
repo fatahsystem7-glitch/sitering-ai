@@ -68,7 +68,7 @@ async function resolveUserId(payload: CallEndPayload): Promise<string | null> {
       .from("telephony_provisioning")
       .select("user_id")
       .eq("assigned_phone_number", payload.assigned_number)
-      .single();
+      .maybeSingle(); // .single() errors on zero rows and swallows the lookup
     return data?.user_id ?? null;
   }
 
@@ -249,7 +249,7 @@ export async function POST(request: NextRequest) {
       .from("telephony_provisioning")
       .select("monthly_cap_minutes")
       .eq("user_id", userId)
-      .single();
+      .maybeSingle(); // a legacy account may not have a telephony row yet
     const cap = telephony?.monthly_cap_minutes ?? PRICING.includedMinutes;
 
     // 4. Report overage (if any) to Stripe metered billing

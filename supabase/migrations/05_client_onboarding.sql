@@ -1,7 +1,11 @@
 -- ─────────────────────────────────────────────────────────────────
 -- SiteRing AI · Database Schema (Migration 05)
--- Public onboarding (account creation + Telnyx KYC documents)
+-- Public onboarding (account creation + Twilio UK regulatory documents)
 -- and the single unified client dashboard (login by Client ID).
+--
+-- NOTE: this file now creates the Twilio-named columns directly. Older
+-- deployments created Telnyx-named columns here; migration 06 renames
+-- those — the rename is a no-op on fresh databases.
 -- ─────────────────────────────────────────────────────────────────
 
 create extension if not exists "pgcrypto";
@@ -26,7 +30,7 @@ create table if not exists public.clients (
   phone_number text,
   emergency_forwarding_number text not null default '',
 
-  -- Step 3 · Address (must match proof of address for Telnyx)
+  -- Step 3 · Address (must match proof of address for Twilio)
   address_line1 text,
   address_line2 text,
   city text,
@@ -41,13 +45,13 @@ create table if not exists public.clients (
   greeting_style text,
   custom_instructions text,
 
-  -- Step 5 · Telnyx verification (KYC documents live in Storage)
+  -- Step 5 · Twilio UK regulatory verification (documents live in Storage)
   id_document_type text,
   id_document_path text,
   proof_of_address_path text,
-  telnyx_verification_status text not null default 'pending',
-  telnyx_verification_notes text,
-  telnyx_number_order_id text,
+  twilio_bundle_status text not null default 'pending',
+  twilio_rejection_reason text,
+  twilio_phone_number_sid text,
 
   -- Assigned telephony + commercials
   assigned_phone_number text,
@@ -59,8 +63,11 @@ create table if not exists public.clients (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
 
-  constraint clients_telnyx_status_check check (
-    telnyx_verification_status in ('pending', 'submitted', 'in_review', 'verified', 'rejected')
+  constraint clients_twilio_bundle_status_check check (
+    twilio_bundle_status in (
+      'pending', 'draft', 'pending-review', 'in-review',
+      'twilio-rejected', 'twilio-approved', 'provisionally-approved'
+    )
   ),
   constraint clients_onboarding_status_check check (
     onboarding_status in ('submitted', 'documents_received', 'provisioning', 'live', 'paused')
@@ -120,7 +127,7 @@ create index if not exists client_documents_client_idx
   on public.client_documents (client_id, created_at desc);
 
 comment on table public.client_documents is
-  'Telnyx verification documents uploaded during onboarding. Files live in the private client-documents Storage bucket.';
+  'Twilio regulatory verification documents uploaded during onboarding. Files live in the private client-documents Storage bucket.';
 
 -- ═════════════════════════════════════════════════════════════════
 -- call_logs / message_logs keyed to the Client ID

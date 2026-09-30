@@ -83,6 +83,8 @@ export type Lead = {
   message: string | null;
   source: string;
   status: LeadStatus;
+  gdpr_consent: boolean;
+  gdpr_consented_at: string | null;
   created_at: string;
 };
 
@@ -150,6 +152,9 @@ export type Client = {
   monthly_cap_minutes: number;
   subscription_status: SubscriptionStatus;
   onboarding_status: OnboardingStatus;
+  gdpr_consent: boolean;
+  gdpr_consented_at: string | null;
+  marketing_consent: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -173,6 +178,44 @@ export type ClientDocument = {
 
 export type ClientDocumentInsert = Partial<ClientDocument> &
   Pick<ClientDocument, "client_id" | "kind" | "storage_path">;
+
+/**
+ * Modular speech/AI provider selection for the LiveKit voice pipeline.
+ * Edited from Admin → Voice Studio; read by the voice agent at session
+ * start, with environment variables as the fallback.
+ */
+export type VoiceProviderSettings = {
+  key: string;
+  tts_provider: "fishaudio" | "openai";
+  tts_model: string;
+  tts_voice: string | null;
+  stt_provider: "openai";
+  stt_model: string;
+  llm_provider: "openai";
+  llm_model: string;
+  fish_latency_mode: "normal" | "balanced" | "low";
+  updated_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type VoiceProviderSettingsUpdate = Partial<
+  Omit<VoiceProviderSettings, "key" | "created_at" | "updated_at">
+>;
+
+/** Audit row: one receptionist-parameter change captured in a voice session. */
+export type VoiceConfigUpdate = {
+  id: string;
+  client_id: string | null;
+  session_id: string | null;
+  admin_user_id: string | null;
+  changes: Record<string, unknown>;
+  source: "admin_voice_session" | "admin_manual" | "dashboard";
+  created_at: string;
+};
+
+export type VoiceConfigUpdateInsert = Partial<VoiceConfigUpdate> &
+  Pick<VoiceConfigUpdate, "changes">;
 
 export type MessageLog = {
   id: string;
@@ -241,6 +284,18 @@ export type Database = {
         Row: ClientDocument;
         Insert: ClientDocumentInsert;
         Update: Partial<ClientDocument>;
+        Relationships: [];
+      };
+      voice_provider_settings: {
+        Row: VoiceProviderSettings;
+        Insert: Partial<VoiceProviderSettings> & Pick<VoiceProviderSettings, "key">;
+        Update: VoiceProviderSettingsUpdate;
+        Relationships: [];
+      };
+      voice_config_updates: {
+        Row: VoiceConfigUpdate;
+        Insert: VoiceConfigUpdateInsert;
+        Update: Partial<VoiceConfigUpdate>;
         Relationships: [];
       };
       message_logs: {

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { sendClientIdEmail, sendNewClientNotification } from "@/lib/email";
+import { sendClientIdEmail, sendNewClientNotification, sendNumberLiveEmail } from "@/lib/email";
 import type { ClientInsert } from "@/lib/supabase/types";
 
 export const dynamic = "force-dynamic";
@@ -52,6 +52,20 @@ const onboardingSchema = z.object({
     .union([z.boolean(), z.string()])
     .transform((v) => v === true || v === "true" || v === "on")
     .refine((v) => v === true, "You must confirm the declaration to continue"),
+
+  // GDPR — the privacy consent box is separate from the Twilio declaration
+  // and timestamped so we can prove when it was given (UK GDPR Art. 7).
+  gdpr_consent: z
+    .union([z.boolean(), z.string()])
+    .transform((v) => v === true || v === "true" || v === "on")
+    .refine(
+      (v) => v === true,
+      "Please accept the Terms and Privacy Policy so we can process your data.",
+    ),
+  marketing_consent: z
+    .union([z.boolean(), z.string()])
+    .transform((v) => v === true || v === "true" || v === "on")
+    .optional(),
 });
 
 function validateFile(file: unknown, label: string): File | string {
@@ -119,6 +133,8 @@ export async function POST(request: Request) {
     custom_instructions: String(form.get("custom_instructions") ?? ""),
     id_document_type: String(form.get("id_document_type") ?? ""),
     consent: form.get("consent") ?? false,
+    gdpr_consent: form.get("gdpr_consent") ?? false,
+    marketing_consent: form.get("marketing_consent") ?? false,
   };
 
   const parsed = onboardingSchema.safeParse(payload);
@@ -162,11 +178,19 @@ export async function POST(request: Request) {
   const supabase = createAdminClient();
 
   // ── Duplicate email guard ───────────────────────────────────────
-  const { data: existing } = await supabase
+  const { data: existing, error: existingError } = await supabase
     .from("clients")
     .select("id")
     .ilike("email", data.email)
     .maybeSingle();
+
+  if (existingError && existingError.code !== "PGRST116") {
+    console.error("[onboarding] Duplicate check failed:", existingError);
+    return NextResponse.json(
+      { ok: false, error: "We couldn't check that email. Please try again." },
+      { status: 500 },
+    );
+  }
 
   if (existing) {
     return NextResponse.json(
@@ -206,6 +230,10 @@ export async function POST(request: Request) {
     business_type: data.company_number?.trim() ? "limited_company" : "sole_trader",
     twilio_bundle_status: "pending",
     onboarding_status: "submitted",
+    // GDPR consent trail — what was agreed, and exactly when.
+    gdpr_consent: data.gdpr_consent,
+    gdpr_consented_at: data.gdpr_consent ? new Date().toISOString() : null,
+    marketing_consent: data.marketing_consent ?? false,
   };
 
   const { data: client, error: insertError } = await supabase
@@ -238,7 +266,7 @@ export async function POST(request: Request) {
 
     if (error) throw new Error(`${kind}: ${error.message}`);
 
-    await supabase.from("client_documents").insert({
+    const { error: docError } = await supabase.from("client_documents").insert({
       client_id: clientId,
       kind,
       storage_path: path,
@@ -246,6 +274,12 @@ export async function POST(request: Request) {
       mime_type: file.type || null,
       size_bytes: file.size,
     });
+
+    if (docError) {
+      // The file is stored but the audit row is missing — loud, not silent.
+      console.error("[onboarding] client_documents insert failed:", docError);
+      throw new Error(`${kind}: audit record could not be created (${docError.message})`);
+    }
 
     return path;
   }
@@ -323,8 +357,10 @@ export async function POST(request: Request) {
 
   // Submit the UK regulatory bundle to Twilio. Deliberately best-effort: if
   // Twilio is down or a document is unreadable the account still exists and
-  // the hourly poll retries, rather than the contractor seeing a failed signup.
+  // the daily poll retries, rather than the contractor seeing a failed signup.
   let complianceSubmitted = false;
+  let bundleApproved = false;
+  let bundleAddressSid: string | null = null;
   if (process.env.TWILIO_AUTO_SUBMIT !== "false") {
     try {
       const { data: fresh } = await supabase
@@ -332,7 +368,7 @@ export async function POST(request: Request) {
         .select(
           "id,business_name,business_type,company_number,owner_name,email,phone_number," +
             "address_line1,address_line2,city,postcode,id_document_type,id_document_path," +
-            "proof_of_address_path",
+            "proof_of_address_path,twilio_bundle_sid,twilio_address_sid",
         )
         .eq("id", clientId)
         .maybeSingle();
@@ -341,6 +377,15 @@ export async function POST(request: Request) {
         const { submitUkBundle } = await import("@/lib/twilio/compliance");
         const result = await submitUkBundle(fresh as never);
         complianceSubmitted = result.submitted;
+        bundleApproved = result.evaluation.compliant;
+
+        // submitUkBundle persists the address/bundle SIDs on the row.
+        const { data: sids } = await supabase
+          .from("clients")
+          .select("twilio_bundle_sid,twilio_address_sid")
+          .eq("id", clientId)
+          .maybeSingle();
+        bundleAddressSid = sids?.twilio_address_sid ?? null;
       }
     } catch (err) {
       console.error("[onboarding] Twilio bundle submission failed:", err);
@@ -354,6 +399,53 @@ export async function POST(request: Request) {
     }
   }
 
+  // ── Buy the number now, as part of account setup ────────────────
+  // Twilio reviews most UK bundles asynchronously, so this usually lands in
+  // the daily poll instead — but when the bundle is compliant on the spot
+  // (or provisioning without a bundle is allowed for this deployment) the
+  // contractor finishes signup with a live number in hand.
+  let assignedNumber: string | null = null;
+  if (bundleApproved || process.env.TWILIO_PROVISION_WITHOUT_BUNDLE === "true") {
+    try {
+      const { provisionNumber } = await import("@/lib/twilio/provisioning");
+      const { data: forProvision } = await supabase
+        .from("clients")
+        .select("id,business_name,twilio_bundle_sid,twilio_address_sid")
+        .eq("id", clientId)
+        .maybeSingle();
+
+      if (forProvision) {
+        const result = await provisionNumber({
+          id: forProvision.id,
+          business_name: forProvision.business_name,
+          twilio_bundle_sid: forProvision.twilio_bundle_sid ?? bundleAddressSid ?? null,
+          twilio_address_sid: forProvision.twilio_address_sid ?? bundleAddressSid ?? null,
+        });
+        assignedNumber = result.phoneNumber;
+
+        // The number is live — say so in the welcome email too.
+        await sendNumberLiveEmail({
+          to: data.email,
+          ownerName: data.owner_name,
+          businessName: data.business_name,
+          phoneNumber: result.phoneNumber,
+          clientId,
+        });
+      }
+    } catch (cause) {
+      // Expected for pending-review bundles: the daily poll finishes the job.
+      console.warn(
+        "[onboarding] Immediate provisioning did not complete (the daily poll will retry):",
+        cause instanceof Error ? cause.message : cause,
+      );
+      await supabase
+        .from("clients")
+        .update({ onboarding_status: "provisioning" })
+        .eq("id", clientId)
+        .eq("onboarding_status", "documents_received");
+    }
+  }
+
   return NextResponse.json(
     {
       ok: true,
@@ -361,6 +453,8 @@ export async function POST(request: Request) {
       email_sent: emailSent,
       documents_uploaded: true,
       compliance_submitted: complianceSubmitted,
+      phone_number: assignedNumber,
+      provisioning_status: assignedNumber ? "live" : "pending_verification",
     },
     { status: 201 },
   );
