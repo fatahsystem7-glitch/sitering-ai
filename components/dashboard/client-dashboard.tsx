@@ -100,7 +100,7 @@ export function ClientDashboard({
     VERIFICATION_COPY[client.twilio_bundle_status] ??
     VERIFICATION_COPY.pending;
 
-  async function copyClientId() {
+  async function copyAccountReference() {
     try {
       await navigator.clipboard.writeText(client.id);
       setCopied(true);
@@ -123,12 +123,12 @@ export function ClientDashboard({
         </div>
         <button
           type="button"
-          onClick={copyClientId}
+          onClick={copyAccountReference}
           className="group rounded-xl border border-border bg-card/60 px-4 py-2.5 text-left transition hover:border-emerald-500/40"
-          title="Copy your Client ID"
+          title="Copy your account reference"
         >
           <span className="block text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
-            Client ID
+            Account reference
           </span>
           <span className="flex items-center gap-2 font-mono text-xs">
             {client.id}
@@ -280,7 +280,7 @@ export function ClientDashboard({
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="text-muted-foreground">Client ID</span>
+                <span className="text-muted-foreground">Account reference (Client ID)</span>
                 <span className="font-mono text-xs">{client.id}</span>
               </div>
               <div className="flex flex-wrap items-center justify-between gap-2">

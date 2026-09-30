@@ -1,13 +1,20 @@
 import crypto from "node:crypto";
 import { cookies } from "next/headers";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { createClient } from "@/lib/supabase/server";
 import type { Client } from "@/lib/supabase/types";
 
 /**
- * Client-ID session
- * ─────────────────
- * Trade contractors log into the single /dashboard with the Client ID (UUID)
- * they receive at the end of the public onboarding form — no email/password.
+ * Dashboard sessions
+ * ──────────────────
+ * Two logins resolve to the same `Client` row, and `getCurrentClient()` is
+ * the single entry point for both:
+ *
+ *  1. Supabase Auth (email + password) — accounts created since migration 08.
+ *     Resolved by `clients.owner_auth_user_id = auth.uid()`.
+ *  2. Client ID (this file's signed cookie) — legacy accounts, unchanged.
+ *     Their rows have no `owner_auth_user_id`, so the cookie is the only
+ *     credential they have and it keeps working.
  *
  * The UUID is never trusted straight from the cookie: we store
  * `<clientId>.<expiry>.<hmac>` signed with a server-only secret, so the cookie
@@ -94,6 +101,17 @@ export function clearClientSession(): void {
   });
 }
 
+/**
+ * Retire a Client-ID cookie left over from a previous sign-in.
+ *
+ * Called after an email + password sign-in so a stale legacy cookie can't
+ * outlive the session it belonged to (and so /login doesn't bounce the user
+ * straight back into the dashboard on the cookie alone).
+ */
+export function clearLegacyClientCookie(): void {
+  clearClientSession();
+}
+
 /** The Client ID in the current request's cookie, or null. */
 export function getClientIdFromCookie(): string | null {
   const token = cookies().get(CLIENT_SESSION_COOKIE)?.value;
@@ -121,9 +139,51 @@ export async function findClientById(clientId: string): Promise<Client | null> {
   }
 }
 
-/** The signed-in client for the current request, or null. */
+/** Resolve the account owned by a Supabase Auth user, or null. */
+export async function findClientByAuthUserId(userId: string): Promise<Client | null> {
+  if (!userId) return null;
+
+  try {
+    const supabase = createAdminClient();
+    const { data, error } = await supabase
+      .from("clients")
+      .select("*")
+      .eq("owner_auth_user_id", userId)
+      .maybeSingle();
+
+    if (error || !data) return null;
+    return data as Client;
+  } catch (err) {
+    console.error("[client-session] Auth-user lookup failed:", err);
+    return null;
+  }
+}
+
+/**
+ * The signed-in client for the current request, or null.
+ *
+ * The email + password session is checked first; the Client-ID cookie is the
+ * fallback, so both kinds of account reach the same dashboard.
+ */
 export async function getCurrentClient(): Promise<Client | null> {
-  const clientId = getClientIdFromCookie();
-  if (!clientId) return null;
-  return findClientById(clientId);
+  const cookieClientId = getClientIdFromCookie();
+
+  try {
+    const {
+      data: { user },
+    } = await createClient().auth.getUser();
+
+    if (user) {
+      const byAuthUser = await findClientByAuthUserId(user.id);
+      // An auth user without a client row (a staff account, say) falls
+      // through to the cookie rather than returning null, so having a stale
+      // Supabase session can never lock a legacy login out of its dashboard.
+      if (byAuthUser) return byAuthUser;
+    }
+  } catch (err) {
+    console.error("[client-session] Auth session lookup failed:", err);
+  }
+
+  if (!cookieClientId) return null;
+  return findClientById(cookieClientId);
 }

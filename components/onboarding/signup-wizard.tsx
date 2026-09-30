@@ -73,7 +73,7 @@ const STEP_META = [
   },
   {
     title: "Your account",
-    description: "Where we send your Client ID and what we forward emergencies to.",
+    description: "Your dashboard login, plus what we forward emergencies to.",
   },
   {
     title: "Registered address",
@@ -100,6 +100,8 @@ type FormState = {
   vat_number: string;
   owner_name: string;
   email: string;
+  password: string;
+  confirm_password: string;
   phone_number: string;
   emergency_forwarding_number: string;
   address_line1: string;
@@ -125,6 +127,8 @@ const INITIAL: FormState = {
   vat_number: "",
   owner_name: "",
   email: "",
+  password: "",
+  confirm_password: "",
   phone_number: "",
   emergency_forwarding_number: "",
   address_line1: "",
@@ -214,6 +218,7 @@ export function SignupWizard() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [clientId, setClientId] = useState<string | null>(null);
+  const [signedIn, setSignedIn] = useState(false);
   const [phoneNumber, setPhoneNumber] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
   const [emailSent, setEmailSent] = useState(false);
@@ -242,6 +247,12 @@ export function SignupWizard() {
       if (form.owner_name.trim().length < 2) return "Please enter your full name.";
       if (!EMAIL_RE.test(form.email.trim()))
         return "Please enter a valid email address.";
+      if (form.password.length < 8)
+        return "Choose a password of at least 8 characters.";
+      if (form.password.length > 72)
+        return "Passwords must be 72 characters or fewer.";
+      if (form.password !== form.confirm_password)
+        return "The two passwords don't match.";
       if (form.phone_number.trim().length < 6)
         return "Please enter a contact number.";
     }
@@ -293,7 +304,9 @@ export function SignupWizard() {
     try {
       const body = new FormData();
       Object.entries(form).forEach(([key, value]) => {
-        if (key === "services_offered") return;
+        // Services are appended individually below, and the confirmation box
+        // is a client-side check the API has no field for.
+        if (key === "services_offered" || key === "confirm_password") return;
         body.append(key, typeof value === "string" ? value : String(value));
       });
       form.services_offered.forEach((s) => body.append("services_offered", s));
@@ -312,6 +325,7 @@ export function SignupWizard() {
       }
 
       setClientId(json.client_id as string);
+      setSignedIn(Boolean(json.signed_in));
       setPhoneNumber((json.phone_number as string | null) ?? null);
       setEmailSent(Boolean(json.email_sent));
       setWarning((json.warning as string) ?? null);
@@ -345,9 +359,13 @@ export function SignupWizard() {
           </span>
           <CardTitle className="text-2xl">You&apos;re all set up</CardTitle>
           <CardDescription>
-            {phoneNumber
-              ? "Your account is live and your dedicated number is already answering calls."
-              : "Your account and documents are saved. Verification with Twilio usually completes within one working day."}
+            {signedIn
+              ? phoneNumber
+                ? "You're signed in — your account is live and your dedicated number is already answering calls."
+                : "You're signed in. Verification with Twilio usually completes within one working day."
+              : phoneNumber
+                ? "Your account is live and your dedicated number is already answering calls."
+                : "Your account and documents are saved. Verification with Twilio usually completes within one working day."}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-5">
@@ -368,16 +386,30 @@ export function SignupWizard() {
           )}
           <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/5 p-5">
             <p className="text-xs font-semibold uppercase tracking-widest text-emerald-400">
-              Your Client ID — this is your dashboard login
+              Your login
             </p>
-            <p className="mt-2 break-all font-mono text-lg font-bold">{clientId}</p>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Email{" "}
+              <span className="font-semibold text-foreground">{form.email}</span>{" "}
+              and the password you just chose.{" "}
+              {signedIn
+                ? "You're already signed in on this device."
+                : "Use them on the login page whenever you come back."}
+            </p>
+          </div>
+
+          <div className="rounded-2xl border border-border bg-muted/20 p-5">
+            <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+              Your account reference (Client ID)
+            </p>
+            <p className="mt-2 break-all font-mono text-sm font-semibold">{clientId}</p>
             <div className="mt-4 flex flex-wrap gap-2">
               <Button size="sm" variant="outline" onClick={copyId}>
                 {copied ? <Check size={16} /> : <Copy size={16} />}
-                {copied ? "Copied" : "Copy Client ID"}
+                {copied ? "Copied" : "Copy reference"}
               </Button>
               <Button size="sm" asChild>
-                <Link href={`/login?client_id=${clientId}`}>
+                <Link href="/dashboard">
                   Go to my dashboard <ArrowRight size={16} />
                 </Link>
               </Button>
@@ -385,15 +417,15 @@ export function SignupWizard() {
           </div>
 
           <p className="text-sm text-muted-foreground">
-            Save this ID somewhere safe — it&apos;s the only credential you
-            need to log into your dashboard.{" "}
+            You log in with your email and password — the reference above is what
+            our team uses to find your account quickly if you ever need help.{" "}
             {emailSent ? (
               <>
                 We&apos;ve also emailed a copy to{" "}
                 <span className="font-medium text-foreground">{form.email}</span>.
               </>
             ) : (
-              <>Screenshot it or copy it now.</>
+              <>Screenshot it or copy it now if you want it handy.</>
             )}
           </p>
 
@@ -514,6 +546,42 @@ export function SignupWizard() {
                 value={form.email}
                 onChange={(e) => set("email", e.target.value)}
               />
+              <p className="text-xs text-muted-foreground">
+                This is your dashboard login — you&apos;ll use it with your
+                password every time.
+              </p>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="password">
+                  Password <span className="text-red-400">*</span>
+                </Label>
+                <Input
+                  id="password"
+                  type="password"
+                  required
+                  minLength={8}
+                  autoComplete="new-password"
+                  placeholder="At least 8 characters"
+                  value={form.password}
+                  onChange={(e) => set("password", e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="confirm_password">
+                  Confirm password <span className="text-red-400">*</span>
+                </Label>
+                <Input
+                  id="confirm_password"
+                  type="password"
+                  required
+                  minLength={8}
+                  autoComplete="new-password"
+                  placeholder="Type it once more"
+                  value={form.confirm_password}
+                  onChange={(e) => set("confirm_password", e.target.value)}
+                />
+              </div>
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
@@ -828,9 +896,9 @@ export function SignupWizard() {
           </Button>
         ) : (
           <span className="text-xs text-muted-foreground">
-            Already onboarded?{" "}
+            Already have an account?{" "}
             <Link href="/login" className="font-semibold text-emerald-400 hover:underline">
-              Log in with your Client ID
+              Log in
             </Link>
           </span>
         )}

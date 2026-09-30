@@ -5,20 +5,22 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { clearClientSession, getClientIdFromCookie } from "@/lib/client-session";
+import { clearClientSession, getCurrentClient } from "@/lib/client-session";
 import type { ClientUpdate } from "@/lib/supabase/types";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
-/* ─── Sign out (clears the Client-ID session and any admin session) ─── */
+/* ─── Sign out (clears whichever session is in play) ───────────────── */
 
 export async function signOut(): Promise<void> {
+  // The signed Client-ID cookie, for legacy accounts…
   clearClientSession();
   try {
+    // …and the Supabase Auth session, for email + password accounts.
     const supabase = createClient();
     await supabase.auth.signOut();
   } catch {
-    /* no Supabase auth session — Client-ID logins don't have one */
+    /* no Supabase Auth session — legacy Client-ID logins don't have one */
   }
   redirect("/login");
 }
@@ -43,8 +45,10 @@ export async function updateAccountSettings(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  const clientId = getClientIdFromCookie();
-  if (!clientId) return { ok: false, error: "Your session expired. Please log in again." };
+  // Resolves an email + password session and a legacy Client-ID cookie alike.
+  const client = await getCurrentClient();
+  if (!client) return { ok: false, error: "Your session expired. Please log in again." };
+  const clientId = client.id;
 
   const parsed = settingsSchema.safeParse(Object.fromEntries(formData));
   if (!parsed.success) {

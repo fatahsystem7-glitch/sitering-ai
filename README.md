@@ -11,13 +11,14 @@ appointment, and alerting the contractor instantly.
 
 ---
 
-## Public Onboarding → Client ID → Single Dashboard
+## Public Onboarding → Email + Password → Single Dashboard
 
 This is the one and only customer journey in this repo.
 
-1. **`/onboarding`** — a public, 5-step form (no login required):
+1. **`/onboarding`** (also served at `/signup`) — a public, 5-step form (no
+   login required):
    1. Business details (name, trade, company/VAT number)
-   2. Account owner (name, email, mobile, emergency forwarding number)
+   2. Account owner (name, **email + password**, mobile, emergency forwarding)
    3. Registered UK address (must match the proof of address)
    4. AI receptionist setup (services, areas, hours, tone, instructions)
    5. **Mandatory Twilio verification uploads** — a copy of their
@@ -25,21 +26,27 @@ This is the one and only customer journey in this repo.
       **proof of address**, plus the GDPR consent box and the Twilio sharing
       declaration.
 
-2. **`POST /api/onboarding`** (multipart) validates everything, inserts a row
-   into `public.clients` — which generates the **Client ID (UUID)** — uploads
-   both documents to the **private `client-documents` Storage bucket** under
-   `<client-id>/…`, records them in `public.client_documents`, timestamps the
-   GDPR consent, submits the Twilio regulatory bundle and then **attempts to
-   buy the phone number immediately** (most UK bundles are reviewed
-   asynchronously, in which case the daily compliance cron finishes the
-   purchase the moment Twilio approves).
+2. **`POST /api/onboarding`** (multipart) validates everything, creates the
+   **Supabase Auth user** for the email + password they just chose, then
+   inserts a row into `public.clients` — which generates the **Client ID
+   (UUID)** and stores `owner_auth_user_id` — uploads both documents to the
+   **private `client-documents` Storage bucket** under `<client-id>/…`, records
+   them in `public.client_documents`, timestamps the GDPR consent, submits the
+   Twilio regulatory bundle and then **attempts to buy the phone number
+   immediately** (most UK bundles are reviewed asynchronously, in which case the
+   daily compliance cron finishes the purchase the moment Twilio approves). If
+   the row insert fails, the freshly created Auth user is rolled back so a retry
+   isn't stuck on "already registered".
 
-3. The contractor is shown (and emailed) their **Client ID**. That UUID is the
-   only credential they need.
+3. The contractor is **signed straight in** (`signed_in: true` in the response)
+   and shown a success screen that leads with their login. The **Client ID is
+   now an account reference rather than a credential** — it is what support
+   quotes to find an account, and the dashboard labels it *Account reference
+   (Client ID)*.
 
-4. **`/login`** takes the Client ID, verifies it against Supabase, and sets a
-   **HMAC-signed, HttpOnly session cookie** (`sitering_client`, 30 days) so the
-   raw UUID can never be forged or brute-forced from the browser.
+4. **`/login`** has three modes — **email + password** (default), *Forgot
+   password?* (emails a Supabase recovery link that `/auth/callback` exchanges,
+   landing on `/reset-password`), and a legacy **Client ID** form.
 
 5. **`/dashboard`** is the single unified dashboard — no separate dashboards.
    Tabs inside one page: **Overview** (verification status, usage, forwarding
@@ -47,8 +54,32 @@ This is the one and only customer journey in this repo.
    **Messages** (SMS / WhatsApp / voicemail transcripts) and **Settings**
    (account + receptionist profile, saved straight back to Supabase).
 
-`/admin` remains an internal, Supabase-Auth-gated staff area and is unrelated
-to the customer flow.
+### Two logins, one dashboard
+
+Accounts created **before** migration 08 have no Supabase Auth user
+(`owner_auth_user_id` is `NULL`) and keep signing in with their **Client ID**,
+verified against Supabase and carried in an **HMAC-signed, HttpOnly session
+cookie** (`sitering_client`, 30 days) so the raw UUID can never be forged or
+brute-forced from the browser. `getCurrentClient()` in `lib/client-session.ts`
+resolves both kinds of account, and `/dashboard` accepts either.
+
+Client-ID login is **refused for accounts that have a password** — for those the
+Client ID is emailed, screenshotted and quoted to support, so it must not grant
+access on its own.
+
+> **There is deliberately no "sign up again with your old email to claim your
+> account" path.** `/api/onboarding` is public and unauthenticated, so matching
+> an existing row on email alone would let anyone who knows a contractor's
+> address take over their account, overwrite their details and drive their
+> Twilio provisioning. Duplicate emails are rejected, exactly as before, backed
+> by the unique index on `lower(email)`. Moving a legacy account to email +
+> password requires an explicit, emailed claim link whose token only the real
+> owner receives.
+
+`/admin` remains an internal staff area and is unrelated to the customer flow:
+middleware requires a Supabase Auth user (the Client-ID cookie deliberately does
+not count there) and the layout calls `requireAdmin()`, which checks
+`profiles.is_admin` / `profiles.role`.
 
 ### Data written to Supabase
 
