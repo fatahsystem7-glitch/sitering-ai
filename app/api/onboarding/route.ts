@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { Pool } from "pg";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { sendClientIdEmail, sendNewClientNotification, sendNumberLiveEmail } from "@/lib/email";
-import type { ClientInsert } from "@/lib/supabase/types";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -107,6 +107,35 @@ function supabaseConfigured(): boolean {
   );
 }
 
+function databaseConfigured(): boolean {
+  return Boolean(process.env.DATABASE_URL);
+}
+
+/**
+ * Direct PostgreSQL pool for the onboarding writes.
+ *
+ * The client row writes below go straight to Postgres rather than through
+ * PostgREST, so a fresh row can never be held up by PostgREST's schema cache
+ * (which can lag behind a new migration). Cached on `globalThis` so Next.js
+ * hot-reload / repeated serverless invocations reuse one pool instead of
+ * opening a fresh connection set on every request.
+ */
+const globalForPg = globalThis as unknown as { onboardingPgPool?: Pool };
+
+function getPool(): Pool {
+  if (!globalForPg.onboardingPgPool) {
+    globalForPg.onboardingPgPool = new Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl:
+        process.env.NODE_ENV === "production"
+          ? { rejectUnauthorized: false }
+          : false,
+      max: 5,
+    });
+  }
+  return globalForPg.onboardingPgPool;
+}
+
 export async function POST(request: Request) {
   let form: FormData;
   try {
@@ -173,18 +202,20 @@ export async function POST(request: Request) {
     );
   }
 
-  if (!supabaseConfigured()) {
+  if (!supabaseConfigured() || !databaseConfigured()) {
     return NextResponse.json(
       {
         ok: false,
         error:
-          "The database isn't connected yet. Add NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to the environment, then try again.",
+          "The database isn't connected yet. Add DATABASE_URL, NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to the environment, then try again.",
       },
       { status: 503 },
     );
   }
 
   const supabase = createAdminClient();
+  // Direct Postgres pool — used for every client row write below.
+  const pool = getPool();
 
   // ── Duplicate email guard ───────────────────────────────────────
   // This is load-bearing, not just tidiness: /api/onboarding is public and
@@ -265,47 +296,62 @@ export async function POST(request: Request) {
   }
 
   // ── 2. Create the account row → this generates the Client ID ────
-  const insert: ClientInsert = {
-    business_name: data.business_name,
-    trade_type: data.trade_type || null,
-    company_number: data.company_number || null,
-    vat_number: data.vat_number || null,
-    owner_name: data.owner_name,
-    email: data.email.toLowerCase(),
-    phone_number: data.phone_number,
-    emergency_forwarding_number: data.emergency_forwarding_number || data.phone_number,
-    address_line1: data.address_line1,
-    address_line2: data.address_line2 || null,
-    city: data.city,
-    postcode: data.postcode.toUpperCase(),
-    country: (data.country || "GB").toUpperCase(),
-    service_areas: data.service_areas || null,
-    services_offered: data.services_offered ?? [],
-    operating_hours: data.operating_hours || null,
-    callout_fee: data.callout_fee || null,
-    greeting_style: data.greeting_style || null,
-    custom_instructions: data.custom_instructions || null,
-    id_document_type: data.id_document_type || null,
-    // Sole traders and limited companies take different Twilio bundles, so the
-    // branch is decided once here rather than re-guessed at submission time.
-    business_type: data.company_number?.trim() ? "limited_company" : "sole_trader",
-    twilio_bundle_status: "pending",
-    onboarding_status: "submitted",
-    // GDPR consent trail — what was agreed, and exactly when.
-    gdpr_consent: data.gdpr_consent,
-    gdpr_consented_at: data.gdpr_consent ? new Date().toISOString() : null,
-    marketing_consent: data.marketing_consent ?? false,
-    // The email + password login this account signs in with.
-    owner_auth_user_id: authUserId,
-  };
+  // Written straight to Postgres (not through PostgREST) so the row always
+  // lands, even when PostgREST's schema cache is behind the latest migration.
+  // Sole traders and limited companies take different Twilio bundles, so the
+  // branch is decided once here rather than re-guessed at submission time.
+  const businessType = data.company_number?.trim() ? "limited_company" : "sole_trader";
+  // GDPR consent trail — what was agreed, and exactly when.
+  const gdprConsentedAt = data.gdpr_consent ? new Date().toISOString() : null;
 
-  const { data: client, error: insertError } = await supabase
-    .from("clients")
-    .insert(insert)
-    .select("id")
-    .single();
-
-  if (insertError || !client) {
+  let clientId: string;
+  try {
+    const { rows } = await pool.query<{ id: string }>(
+      `insert into public.clients (
+         business_name, trade_type, company_number, vat_number,
+         owner_name, email, phone_number, emergency_forwarding_number,
+         address_line1, address_line2, city, postcode, country,
+         service_areas, services_offered, operating_hours, callout_fee,
+         greeting_style, custom_instructions, id_document_type,
+         business_type, twilio_bundle_status, onboarding_status,
+         gdpr_consent, gdpr_consented_at, marketing_consent, owner_auth_user_id
+       ) values (
+         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+         $14, $15, $16, $17, $18, $19, $20,
+         $21, 'pending', 'submitted',
+         $22, $23, $24, $25
+       )
+       returning id`,
+      [
+        data.business_name,
+        data.trade_type || null,
+        data.company_number || null,
+        data.vat_number || null,
+        data.owner_name,
+        data.email.toLowerCase(),
+        data.phone_number,
+        data.emergency_forwarding_number || data.phone_number,
+        data.address_line1,
+        data.address_line2 || null,
+        data.city,
+        data.postcode.toUpperCase(),
+        (data.country || "GB").toUpperCase(),
+        data.service_areas || null,
+        data.services_offered ?? [],
+        data.operating_hours || null,
+        data.callout_fee || null,
+        data.greeting_style || null,
+        data.custom_instructions || null,
+        data.id_document_type || null,
+        businessType,
+        data.gdpr_consent,
+        gdprConsentedAt,
+        data.marketing_consent ?? false,
+        authUserId,
+      ],
+    );
+    clientId = rows[0].id;
+  } catch (insertError) {
     console.error("[onboarding] Failed to create client:", insertError);
     // Roll the fresh Auth user back, so retrying the form isn't stuck on
     // "already registered" for an account that was never created.
@@ -319,8 +365,6 @@ export async function POST(request: Request) {
       { status: 500 },
     );
   }
-
-  const clientId = client.id as string;
 
   /**
    * Signs the new contractor in on this device (writes the Supabase session
@@ -382,26 +426,28 @@ export async function POST(request: Request) {
       upload(poaDoc as File, "proof_of_address"),
     ]);
 
-    await supabase
-      .from("clients")
-      .update({
-        id_document_path: idPath,
-        proof_of_address_path: poaPath,
-        twilio_bundle_status: "pending",
-        onboarding_status: "documents_received",
-      })
-      .eq("id", clientId);
+    await pool.query(
+      `update public.clients
+          set id_document_path = $1,
+              proof_of_address_path = $2,
+              twilio_bundle_status = 'pending',
+              onboarding_status = 'documents_received'
+        where id = $3`,
+      [idPath, poaPath, clientId],
+    );
   } catch (err) {
     console.error("[onboarding] Document upload failed:", err);
     // The account exists — let them in, but flag the missing documents.
-    await supabase
-      .from("clients")
-      .update({
-        twilio_bundle_status: "pending",
-        twilio_rejection_reason:
-          "Document upload failed during onboarding — re-upload required before number provisioning.",
-      })
-      .eq("id", clientId);
+    await pool.query(
+      `update public.clients
+          set twilio_bundle_status = 'pending',
+              twilio_rejection_reason = $1
+        where id = $2`,
+      [
+        "Document upload failed during onboarding — re-upload required before number provisioning.",
+        clientId,
+      ],
+    );
 
     const emailSentOnFailure = await sendClientIdEmail({
       to: data.email,
@@ -484,13 +530,10 @@ export async function POST(request: Request) {
       }
     } catch (err) {
       console.error("[onboarding] Twilio bundle submission failed:", err);
-      await supabase
-        .from("clients")
-        .update({
-          twilio_rejection_reason:
-            err instanceof Error ? err.message : "Bundle submission failed.",
-        })
-        .eq("id", clientId);
+      await pool.query(
+        `update public.clients set twilio_rejection_reason = $1 where id = $2`,
+        [err instanceof Error ? err.message : "Bundle submission failed.", clientId],
+      );
     }
   }
 
