@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { Pool } from "pg";
+import { getSharedPgPool, isDatabaseConfigured } from "@/lib/db/postgres";
+import { getMissingEnv } from "@/lib/env";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { sendClientIdEmail, sendNewClientNotification, sendNumberLiveEmail } from "@/lib/email";
@@ -101,39 +102,19 @@ function extensionFor(file: File): string {
   return "jpg";
 }
 
-function supabaseConfigured(): boolean {
-  return Boolean(
-    process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY,
-  );
-}
-
-function databaseConfigured(): boolean {
-  return Boolean(process.env.DATABASE_URL);
-}
-
 /**
- * Direct PostgreSQL pool for the onboarding writes.
- *
- * The client row writes below go straight to Postgres rather than through
- * PostgREST, so a fresh row can never be held up by PostgREST's schema cache
- * (which can lag behind a new migration). Cached on `globalThis` so Next.js
- * hot-reload / repeated serverless invocations reuse one pool instead of
- * opening a fresh connection set on every request.
+ * Preflight: every environment variable this route needs, by name. The
+ * database URL check goes through the shared resolver so the SUPABASE_DB_URL /
+ * POSTGRES_URL aliases count too.
  */
-const globalForPg = globalThis as unknown as { onboardingPgPool?: Pool };
-
-function getPool(): Pool {
-  if (!globalForPg.onboardingPgPool) {
-    globalForPg.onboardingPgPool = new Pool({
-      connectionString: process.env.DATABASE_URL,
-      ssl:
-        process.env.NODE_ENV === "production"
-          ? { rejectUnauthorized: false }
-          : false,
-      max: 5,
-    });
-  }
-  return globalForPg.onboardingPgPool;
+function missingEnvironment(): string[] {
+  const missing = getMissingEnv([
+    "NEXT_PUBLIC_SUPABASE_URL",
+    "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+    "SUPABASE_SERVICE_ROLE_KEY",
+  ]);
+  if (!isDatabaseConfigured()) missing.push("DATABASE_URL");
+  return missing;
 }
 
 export async function POST(request: Request) {
@@ -202,20 +183,30 @@ export async function POST(request: Request) {
     );
   }
 
-  if (!supabaseConfigured() || !databaseConfigured()) {
+  const missingEnv = missingEnvironment();
+  if (missingEnv.length > 0) {
+    console.error(
+      "[onboarding] Refusing submission — missing environment variables:",
+      missingEnv.join(", "),
+    );
     return NextResponse.json(
       {
         ok: false,
-        error:
-          "The database isn't connected yet. Add DATABASE_URL, NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to the environment, then try again.",
+        error: "server_not_configured",
+        missing_env: missingEnv,
+        message:
+          `The server isn't fully configured yet. Missing environment ` +
+          `variables: ${missingEnv.join(", ")}. Add them in Vercel → ` +
+          `Settings → Environment Variables (or .env.local locally), then redeploy.`,
       },
       { status: 503 },
     );
   }
 
   const supabase = createAdminClient();
-  // Direct Postgres pool — used for every client row write below.
-  const pool = getPool();
+  // Direct Postgres pool — used for every client row write below. SSL and the
+  // IPv4 pooler route are handled by lib/db/postgres for the whole app.
+  const pool = getSharedPgPool();
 
   // ── Duplicate email guard ───────────────────────────────────────
   // This is load-bearing, not just tidiness: /api/onboarding is public and

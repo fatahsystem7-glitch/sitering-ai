@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
+import { formatMissingEnv, getMissingEnv } from "@/lib/env";
 import type { Database } from "./types";
 
 type CookieToSet = { name: string; value: string; options: CookieOptions };
@@ -10,6 +11,16 @@ type CookieToSet = { name: string; value: string; options: CookieOptions };
  */
 export function createClient() {
   const cookieStore = cookies();
+
+  // Fail fast with the missing variable names rather than a cryptic
+  // "supabaseUrl is required" from deep inside supabase-js.
+  const missing = getMissingEnv([
+    "NEXT_PUBLIC_SUPABASE_URL",
+    "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+  ]);
+  if (missing.length > 0) {
+    throw new Error(formatMissingEnv(missing));
+  }
 
   return createServerClient<Database>(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
