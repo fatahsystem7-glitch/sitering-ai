@@ -133,12 +133,13 @@ NEXT_PUBLIC_SUPABASE_URL=       # Supabase → Project Settings → API
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=      # server-only; uploads + dashboard reads
 CLIENT_SESSION_SECRET=          # openssl rand -base64 48 (signs the session cookie)
-DATABASE_URL=                   # so `npm run build` applies supabase/migrations
+DATABASE_URL=                   # Postgres pooler — runtime writes + `npm run db:migrate`
 ```
 
-Apply `supabase/migrations/05_client_onboarding.sql` (automatic on build when
-`DATABASE_URL` is set, or paste it into the Supabase SQL editor) before using
-the onboarding form.
+Apply `supabase/migrations/*.sql` before using the onboarding form:
+`npm run db:migrate` (reads `DATABASE_URL`, or `.env.local`), or paste the
+files into the Supabase SQL editor. Migrations are **never** run during
+`npm run build` — the build compiles only and does not touch the database.
 
 ## Tech Stack
 
@@ -210,9 +211,11 @@ cp .env.example .env.local
 
 ### 3. Database
 
-`npm run build` applies `supabase/migrations/*.sql` when `DATABASE_URL` is set.
-A missing URL warns and continues. A set URL that fails SQL stops the build.
-The SQL editor is not required.
+`npm run db:migrate` applies `supabase/migrations/*.sql` in order (tracks
+progress in a `schema_migrations` table). It reads `DATABASE_URL` — falling
+back to `.env.local`/`.env` locally — and fails loudly if neither is set.
+`npm run build` never runs migrations, so deployments cannot fail on DDL or
+build-container SSL limits. The Supabase SQL editor works too if you prefer.
 
 1. `01_schema.sql` — profiles, telephony, call logs, RLS
 2. `02_admin.sql` — admin flags and call enrichment
@@ -401,6 +404,11 @@ subscriber settings page.
 3. Add all `.env.local` values as **Environment Variables**
 4. Update Supabase redirect URLs, Stripe webhook URL and voice-agent webhook
    to the production domain
+5. Apply the schema once per environment — from your machine run
+   `DATABASE_URL=<pooler-url> npm run db:migrate` (or paste
+   `supabase/migrations/*.sql` into the Supabase SQL editor). Vercel's build
+   phase never executes migrations, so a schema change is never able to
+   break a deployment
 
 `vercel.json` schedules the compliance poll (`/api/compliance/poll`) **daily
 at 00:00 UTC** (`0 0 * * *`) — the Hobby plan only allows cron jobs that run
@@ -408,14 +416,17 @@ once per day, and an hourly schedule blocks the deployment.
 
 ## Scripts
 
-| Command             | Description                  |
-| ------------------- | ---------------------------- |
-| `npm run dev`       | Start dev server             |
-| `npm run build`     | Production build             |
-| `npm run start`     | Serve production build       |
-| `npm run lint`      | Next.js ESLint               |
-| `npm run typecheck` | Strict TypeScript check      |
-| `npm run format`    | Prettier-format source files |
+| Command               | Description                                        |
+| --------------------- | -------------------------------------------------- |
+| `npm run dev`         | Start dev server                                   |
+| `npm run build`       | Production build (no database access)              |
+| `npm run start`       | Serve production build                             |
+| `npm run db:migrate`  | Apply `supabase/migrations/*.sql` manually         |
+| `npm run check-env`   | Verify required environment variables              |
+| `npm run check:speech`| Assert Fish Audio + OpenAI voice stack             |
+| `npm run lint`        | Next.js ESLint                                     |
+| `npm run typecheck`   | Strict TypeScript check                            |
+| `npm run format`      | Prettier-format source files                       |
 
 ## Licence
 

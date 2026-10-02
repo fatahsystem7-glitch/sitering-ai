@@ -11,7 +11,20 @@ const REQUIRED = [
   "NEXT_PUBLIC_SUPABASE_ANON_KEY",
   "SUPABASE_SERVICE_ROLE_KEY",
   "CLIENT_SESSION_SECRET",
+  "DATABASE_URL",
 ];
+
+/** DATABASE_URL is also satisfied by its aliases (same as lib/db/postgres.ts). */
+function isSet(key) {
+  if (key === "DATABASE_URL") {
+    return Boolean(
+      process.env.DATABASE_URL?.trim() ||
+        process.env.SUPABASE_DB_URL?.trim() ||
+        process.env.POSTGRES_URL?.trim(),
+    );
+  }
+  return Boolean(process.env[key]?.trim());
+}
 
 const INTEGRATIONS = [
   {
@@ -66,13 +79,13 @@ const INTEGRATIONS = [
 const all = process.argv.includes("--all");
 let failed = false;
 
-const missing = REQUIRED.filter((key) => !process.env[key]?.trim());
+const missing = REQUIRED.filter((key) => !isSet(key));
 if (missing.length) {
   console.error("Missing REQUIRED environment variables:");
   for (const key of missing) console.error(`  - ${key}`);
   failed = true;
 } else {
-  console.log("✓ Required variables are set (Supabase + session secret).");
+  console.log("✓ Required variables are set (Supabase, Postgres + session secret).");
 }
 
 const demoFallback = process.env.NEXT_PUBLIC_DEMO_CALL_NUMBER?.trim();
